@@ -1,0 +1,7 @@
+/*
+!/.gitignore
+!/*.ipynb
+!/artifacts/
+!/artifacts/pytorch/
+!/artifacts/pytorch/checkpoints/
+!/artifacts/pytorch/checkpoints/dog_image_cnn.pt
