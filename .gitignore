@@ -1,0 +1,13 @@
+# Datos: se reconstruyen con `python dataset.py` (no se versionan)
+data/
+
+# Entornos e intermedios de Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.keras/
+
+# Logs de TensorBoard (muchos archivos); el modelo y la gráfica SÍ se versionan
+artifacts/tensorboard/
