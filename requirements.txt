@@ -1,6 +1,12 @@
 # Detector perro vs no-perro — dependencias (CPU funciona; GPU es opcional).
-tensorflow>=2.19
+# Compartido
 numpy>=1.26
 matplotlib>=3.8
 pillow>=10.0
 tqdm>=4.66
+# TensorFlow
+tensorflow>=2.19
+# PyTorch
+torch>=2.2
+torchvision>=0.17
+scikit-learn>=1.3
