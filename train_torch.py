@@ -51,6 +51,7 @@ DATA_ROOT = dataset_module.RAW_ROOT
 ARTIFACTS_DIR = PROJECT_ROOT / 'artifacts'
 MODEL_PATH = ARTIFACTS_DIR / 'dog_detector_torch.pt'
 HISTORY_PLOT = ARTIFACTS_DIR / 'dog_detector_torch_history.png'
+CONFUSION_MATRIX_PLOT = ARTIFACTS_DIR / 'dog_detector_torch_confusion_matrix.png'
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -169,10 +170,29 @@ def evaluate(model, loader, class_names: List[str]) -> Dict[str, object]:
         matrix[t, p] += 1
     accuracy = float((pred == true).mean())
     auc = float(roc_auc_score(true, prob))
+
+    fig, ax = plt.subplots(figsize=(5, 4))
+    im = ax.imshow(matrix, cmap='Blues')
+    ax.set_xticks([0, 1])
+    ax.set_yticks([0, 1])
+    ax.set_xticklabels(class_names)
+    ax.set_yticklabels(class_names)
+    ax.set_xlabel('Predicho')
+    ax.set_ylabel('Real')
+    ax.set_title('Matriz de confusión')
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            ax.text(j, i, str(matrix[i, j]), ha='center', va='center', color='black')
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(CONFUSION_MATRIX_PLOT, dpi=120)
+    plt.close(fig)
+
     print(f'\nClases: {class_names}')
     print('Matriz de confusión (filas=real, columnas=predicho):')
     print(matrix)
     print(f'Accuracy en validación: {accuracy:.4f} | AUC: {auc:.4f}')
+    print('Matriz de confusión guardada en', CONFUSION_MATRIX_PLOT)
     return {'accuracy': accuracy, 'auc': auc, 'confusion_matrix': matrix, 'class_names': class_names}
 
 

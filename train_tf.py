@@ -47,6 +47,7 @@ ARTIFACTS_DIR = PROJECT_ROOT / 'artifacts'
 TENSORBOARD_DIR = ARTIFACTS_DIR / 'tensorboard'
 MODEL_PATH = ARTIFACTS_DIR / 'dog_detector_tf.keras'
 HISTORY_PLOT = ARTIFACTS_DIR / 'dog_detector_tf_history.png'
+CONFUSION_MATRIX_PLOT = ARTIFACTS_DIR / 'dog_detector_tf_confusion_matrix.png'
 for directory in (ARTIFACTS_DIR, TENSORBOARD_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -136,10 +137,29 @@ def evaluate(model: tf.keras.Model, dataset: tf.data.Dataset, class_names: List[
 
     matrix = confusion_matrix(true, predicted)
     accuracy = float((predicted == true).mean())
+
+    fig, ax = plt.subplots(figsize=(5, 4))
+    im = ax.imshow(matrix, cmap='Blues')
+    ax.set_xticks([0, 1])
+    ax.set_yticks([0, 1])
+    ax.set_xticklabels(class_names)
+    ax.set_yticklabels(class_names)
+    ax.set_xlabel('Predicho')
+    ax.set_ylabel('Real')
+    ax.set_title('Matriz de confusión')
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            ax.text(j, i, str(matrix[i, j]), ha='center', va='center', color='black')
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(CONFUSION_MATRIX_PLOT, dpi=120)
+    plt.close(fig)
+
     print(f'\nClases: {class_names}')
     print('Matriz de confusión (filas=real, columnas=predicho):')
     print(matrix)
     print(f'Accuracy en validación: {accuracy:.4f}')
+    print('Matriz de confusión guardada en', CONFUSION_MATRIX_PLOT)
     return {'accuracy': accuracy, 'confusion_matrix': matrix, 'class_names': class_names}
 
 
