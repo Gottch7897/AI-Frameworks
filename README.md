@@ -45,6 +45,13 @@ pip install -r requirements.txt
 Abre el que quieras y ejecuta todas las celdas ("Run All"): verifica dependencias,
 construye/detecta el dataset, entrena y muestra la matriz de confusión y las curvas.
 
+
+1. Ejecuta las celdas iniciales en orden para cargar dependencias, preparar el dataset y entrenar el modelo.
+2. Ejecuta la celda de resultados para ver las métricas finales y la matriz de confusión en texto.
+3. Ejecuta la celda que guarda la matriz de confusión para generar la imagen en `artifacts/`.
+4. Ejecuta la celda de inferencia, cambia la ruta de ejemplo por tu foto y llama a la función `predict_image(...)`.
+5. La salida te devuelve la probabilidad de `dog` y la etiqueta final (`dog` o `not_dog`).
+
 ### Opción B — Scripts
 ```bash
 python dataset.py               # descarga y ordena el dataset (idempotente)
