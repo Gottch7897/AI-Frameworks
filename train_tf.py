@@ -33,7 +33,7 @@ import dataset as dataset_module
 
 
 @dataclass(frozen=True)
-class Config:
+class Config: #JUMP1
     image_size: Tuple[int, int] = (224, 224)
     batch_size: int = 32
     epochs: int = 30
@@ -86,7 +86,7 @@ def build_datasets(config: Config) -> Tuple[tf.data.Dataset, tf.data.Dataset, Li
     return train_ds, valid_ds, class_names
 
 
-def build_cnn(image_size: Tuple[int, int], dropout: float, dense_units: int = 256, augment: bool = True) -> tf.keras.Model:
+def build_cnn(image_size: Tuple[int, int], dropout: float, dense_units: int = 256, augment: bool = True) -> tf.keras.Model: #JUMP2
     """CNN desde cero: 4 bloques + GlobalAveragePooling, con hiperparámetros ajustables."""
     inputs = tf.keras.Input(shape=(*image_size, 3))
     x = inputs
@@ -191,7 +191,7 @@ def plot_history(history: tf.keras.callbacks.History, save_path: Path) -> None:
     print('Gráfica guardada en', save_path)
 
 
-def train_model(config: Config, train_ds: tf.data.Dataset, valid_ds: tf.data.Dataset, class_names: List[str],
+def train_model(config: Config, train_ds: tf.data.Dataset, valid_ds: tf.data.Dataset, class_names: List[str], #JUMP3
                 hyperparams: Dict[str, object], epochs: int) -> Tuple[tf.keras.Model, tf.keras.callbacks.History]:
     tf.keras.backend.clear_session()
     tf.keras.utils.set_random_seed(config.seed)
@@ -217,7 +217,7 @@ def train_model(config: Config, train_ds: tf.data.Dataset, valid_ds: tf.data.Dat
     return model, history
 
 
-def run_optuna(config: Config, train_ds: tf.data.Dataset, valid_ds: tf.data.Dataset, class_names: List[str]) -> optuna.study.Study:
+def run_optuna(config: Config, train_ds: tf.data.Dataset, valid_ds: tf.data.Dataset, class_names: List[str]) -> optuna.study.Study: #JUMP4, probar combinaciones
     print('Ejecutando Optuna para TensorFlow...')
 
     def objective(trial: optuna.Trial) -> float:
@@ -253,11 +253,11 @@ def run(epochs: int = CONFIG.epochs, optuna_trials: int = CONFIG.optuna_trials,
         config = Config(epochs=epochs, optuna_trials=optuna_trials, optuna_epochs=optuna_epochs)
         study = run_optuna(config, train_ds, valid_ds, class_names)
         best_params = study.best_params
-        print('\nMejores hiperparámetros encontrados con Optuna:')
+        print('\nMejores hiperparámetros encontrados con Optuna:') #JUMP5
         for key, value in best_params.items():
             print(f'  {key}: {value}')
         with OPTUNA_BEST_PARAMS_PATH.open('w', encoding='utf-8') as handle:
-            json.dump(best_params, handle, indent=2)
+            json.dump(best_params, handle, indent=2) #JUMP6
         hyperparams = best_params
     else:
         hyperparams = {
