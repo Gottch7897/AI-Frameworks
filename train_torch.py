@@ -1,18 +1,20 @@
 """Entrena el detector perro vs no-perro con una CNN **desde cero** en PyTorch.
 
-Réplica del modelo de `train.py` (TensorFlow) para comparar frameworks sobre el
+Réplica del modelo de `train_tf.py` para comparar frameworks sobre el
 MISMO dataset: misma arquitectura (4 bloques conv + GlobalAveragePooling), data
 augmentation, early stopping y LR scheduling. Usa GPU si está disponible.
 
 Uso:
     python train_torch.py                # 30 epochs
     python train_torch.py --epochs 40
+    python train_torch.py --optuna-trials 8 --optuna-epochs 4
 """
 
 from __future__ import annotations
 
 import argparse
 import copy
+import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +25,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+import optuna
 import torch
 import torch.nn as nn
 from sklearn.metrics import roc_auc_score
@@ -43,6 +46,9 @@ class Config:
     patience: int = 10
     seed: int = 42
     num_workers: int = 4
+    optuna_trials: int = 0
+    optuna_epochs: int = 4
+    optuna_study_name: str = 'dog_detector_torch'
 
 
 CONFIG = Config()
@@ -52,6 +58,7 @@ ARTIFACTS_DIR = PROJECT_ROOT / 'artifacts'
 MODEL_PATH = ARTIFACTS_DIR / 'dog_detector_torch.pt'
 HISTORY_PLOT = ARTIFACTS_DIR / 'dog_detector_torch_history.png'
 CONFUSION_MATRIX_PLOT = ARTIFACTS_DIR / 'dog_detector_torch_confusion_matrix.png'
+OPTUNA_BEST_PARAMS_PATH = ARTIFACTS_DIR / 'dog_detector_torch_optuna_best_params.json'
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -79,7 +86,6 @@ def build_loaders(config: Config) -> Tuple[DataLoader, DataLoader, List[str]]:
         transforms.ToTensor(),
     ])
 
-    # Dos vistas del mismo dataset (transforms distintos) y el mismo split de índices.
     full_train = datasets.ImageFolder(str(DATA_ROOT), transform=train_tf)
     full_eval = datasets.ImageFolder(str(DATA_ROOT), transform=eval_tf)
     n = len(full_train)
@@ -102,7 +108,7 @@ def build_loaders(config: Config) -> Tuple[DataLoader, DataLoader, List[str]]:
 class DogDetector(nn.Module):
     """Misma arquitectura que la CNN de TensorFlow: 4 bloques + GAP, salida 1 logit."""
 
-    def __init__(self, dropout: float = 0.4) -> None:
+    def __init__(self, dropout: float = 0.4, dense_units: int = 256) -> None:
         super().__init__()
 
         def block(in_ch: int, out_ch: int, n_convs: int, drop: float) -> nn.Sequential:
@@ -124,12 +130,12 @@ class DogDetector(nn.Module):
         self.head = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
-            nn.Linear(256, 256), nn.ReLU(inplace=True), nn.Dropout(dropout),
-            nn.Linear(256, 1),
+            nn.Linear(256, dense_units), nn.ReLU(inplace=True), nn.Dropout(dropout),
+            nn.Linear(dense_units, 1),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.head(self.features(x))  # logits (N, 1)
+        return self.head(self.features(x))
 
 
 def run_epoch(model, loader, criterion, optimizer=None) -> Tuple[float, float]:
@@ -209,7 +215,63 @@ def plot_history(history: Dict[str, List[float]], save_path: Path) -> None:
     print('Gráfica guardada en', save_path)
 
 
-def run(epochs: int = CONFIG.epochs) -> Dict[str, object]:
+def train_model(config: Config, train_loader: DataLoader, valid_loader: DataLoader, class_names: List[str],
+                hyperparams: Dict[str, object], epochs: int) -> Tuple[torch.nn.Module, Dict[str, List[float]]]:
+    set_seed(config.seed)
+    model = DogDetector(dropout=float(hyperparams['dropout']), dense_units=int(hyperparams['dense_units'])).to(DEVICE)
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer_name = str(hyperparams['optimizer'])
+    optimizer = {
+        'adam': torch.optim.Adam(model.parameters(), lr=float(hyperparams['learning_rate'])),
+        'sgd': torch.optim.SGD(model.parameters(), lr=float(hyperparams['learning_rate']), momentum=0.9),
+        'rmsprop': torch.optim.RMSprop(model.parameters(), lr=float(hyperparams['learning_rate'])),
+    }[optimizer_name]
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-5)
+
+    history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
+    best_val_loss = float('inf')
+    best_state = copy.deepcopy(model.state_dict())
+    epochs_no_improve = 0
+    for epoch in range(1, epochs + 1):
+        train_loss, train_acc = run_epoch(model, train_loader, criterion, optimizer)
+        val_loss, val_acc = run_epoch(model, valid_loader, criterion, None)
+        scheduler.step(val_loss)
+        for key, value in zip(history, (train_loss, train_acc, val_loss, val_acc)):
+            history[key].append(value)
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_state = copy.deepcopy(model.state_dict())
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= max(2, config.patience // 2):
+                break
+    model.load_state_dict(best_state)
+    return model, history
+
+
+def run_optuna(config: Config, train_loader: DataLoader, valid_loader: DataLoader, class_names: List[str]) -> optuna.study.Study:
+    print('Ejecutando Optuna para PyTorch...')
+
+    def objective(trial: optuna.Trial) -> float:
+        hyperparams = {
+            'learning_rate': trial.suggest_float('learning_rate', 1e-4, 1e-2, log=True),
+            'dropout': trial.suggest_float('dropout', 0.15, 0.5),
+            'dense_units': trial.suggest_categorical('dense_units', [128, 256]),
+            'optimizer': trial.suggest_categorical('optimizer', ['adam', 'sgd', 'rmsprop']),
+        }
+        _, history = train_model(config, train_loader, valid_loader, class_names, hyperparams, config.optuna_epochs)
+        val_acc = history['val_acc']
+        return float(max(val_acc)) if val_acc else 0.0
+
+    sampler = optuna.samplers.TPESampler(seed=config.seed)
+    study = optuna.create_study(direction='maximize', sampler=sampler, study_name=config.optuna_study_name)
+    study.optimize(objective, n_trials=config.optuna_trials, show_progress_bar=False)
+    return study
+
+
+def run(epochs: int = CONFIG.epochs, optuna_trials: int = CONFIG.optuna_trials,
+        optuna_epochs: int = CONFIG.optuna_epochs) -> Dict[str, object]:
     print('PyTorch:', torch.__version__, '| device:', DEVICE)
     if not dataset_module.is_ready():
         raise SystemExit('No hay dataset. Corre primero: python dataset.py')
@@ -218,38 +280,24 @@ def run(epochs: int = CONFIG.epochs) -> Dict[str, object]:
     train_loader, valid_loader, class_names = build_loaders(CONFIG)
     print('Clases:', class_names)
 
-    model = DogDetector(CONFIG.dropout).to(DEVICE)
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG.learning_rate)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-5)
+    if optuna_trials > 0:
+        config = Config(epochs=epochs, optuna_trials=optuna_trials, optuna_epochs=optuna_epochs)
+        study = run_optuna(config, train_loader, valid_loader, class_names)
+        print('\nMejores hiperparámetros encontrados con Optuna:')
+        for key, value in study.best_params.items():
+            print(f'  {key}: {value}')
+        with OPTUNA_BEST_PARAMS_PATH.open('w', encoding='utf-8') as handle:
+            json.dump(study.best_params, handle, indent=2)
+        hyperparams = study.best_params
+    else:
+        hyperparams = {
+            'learning_rate': CONFIG.learning_rate,
+            'dropout': CONFIG.dropout,
+            'dense_units': 256,
+            'optimizer': 'adam',
+        }
 
-    history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
-    best_val = float('inf')
-    best_state = copy.deepcopy(model.state_dict())
-    epochs_no_improve = 0
-
-    for epoch in range(1, epochs + 1):
-        train_loss, train_acc = run_epoch(model, train_loader, criterion, optimizer)
-        val_loss, val_acc = run_epoch(model, valid_loader, criterion, None)
-        scheduler.step(val_loss)
-        for key, value in zip(history, (train_loss, train_acc, val_loss, val_acc)):
-            history[key].append(value)
-        lr = optimizer.param_groups[0]['lr']
-        print(f'Epoch {epoch:02d}/{epochs} | train_loss={train_loss:.4f} acc={train_acc:.4f} '
-              f'| val_loss={val_loss:.4f} acc={val_acc:.4f} | lr={lr:.2e}')
-
-        if val_loss < best_val:
-            best_val = val_loss
-            best_state = copy.deepcopy(model.state_dict())
-            torch.save(best_state, MODEL_PATH)
-            epochs_no_improve = 0
-        else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= CONFIG.patience:
-                print(f'Early stopping en epoch {epoch} (mejor val_loss={best_val:.4f})')
-                break
-
-    model.load_state_dict(best_state)  # restaurar mejores pesos
+    model, history = train_model(CONFIG, train_loader, valid_loader, class_names, hyperparams, epochs)
     plot_history(history, HISTORY_PLOT)
     results = evaluate(model, valid_loader, class_names)
     print('\nModelo guardado en', MODEL_PATH)
@@ -259,8 +307,10 @@ def run(epochs: int = CONFIG.epochs) -> Dict[str, object]:
 def main() -> None:
     parser = argparse.ArgumentParser(description='Entrena el detector perro vs no-perro en PyTorch.')
     parser.add_argument('--epochs', type=int, default=CONFIG.epochs)
+    parser.add_argument('--optuna-trials', type=int, default=CONFIG.optuna_trials)
+    parser.add_argument('--optuna-epochs', type=int, default=CONFIG.optuna_epochs)
     args = parser.parse_args()
-    run(epochs=args.epochs)
+    run(epochs=args.epochs, optuna_trials=args.optuna_trials, optuna_epochs=args.optuna_epochs)
 
 
 if __name__ == '__main__':
