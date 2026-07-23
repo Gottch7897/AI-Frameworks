@@ -36,6 +36,10 @@ source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+Si vas a usar **TensorFlow con GPU**, crea un entorno aparte y reinstala con el
+build CUDA de TensorFlow (`tensorflow[and-cuda]`). En el notebook o script de
+TensorFlow, el arranque GPU ya está preparado para buscar ese entorno dedicado.
+
 ## Cómo correr
 
 ### Opción A — Notebooks (recomendada)

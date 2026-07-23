@@ -4,8 +4,8 @@ numpy>=1.26
 matplotlib>=3.8
 pillow>=10.0
 tqdm>=4.66
-# TensorFlow
-tensorflow>=2.19
+# TensorFlow (usa `tensorflow[and-cuda]` cuando quieras GPU en Linux/WSL2)
+tensorflow[and-cuda]>=2.19
 # PyTorch
 torch>=2.2
 torchvision>=0.17
