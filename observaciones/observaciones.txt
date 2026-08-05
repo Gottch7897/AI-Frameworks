@@ -1,0 +1,9 @@
+Observaciones-
+
+Códigos sin obtención de métricas.
+
+Para la siguiente entrega deben considerar complejizar sus modelos y crear un flujo de trabajo que puedan cargar en su aplicación.
+
+Deben al menos utilizar 6 modelos para operar su aplicación y encontrar un uso comercial a la misma.
+
+Junto con esto no solo deben capturar las métricas sino que interpretarlas correctamente.
