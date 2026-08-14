@@ -70,6 +70,13 @@ ARTIFACTS_DIR = PROJECT_ROOT / 'artifacts'
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+POSITIVE_CLASS_NAME = 'dog'
+
+
+def device_label() -> str:
+    if DEVICE.type == 'cuda':
+        return f'GPU ({torch.cuda.get_device_name(0)})'
+    return 'CPU'
 
 
 MODEL_SPECS: Dict[str, ModelSpec] = {
@@ -170,6 +177,16 @@ def build_loaders(config: Config, spec: ModelSpec) -> Tuple[DataLoader, DataLoad
     return train_loader, valid_loader, class_names, train_labels, class_counts
 
 
+def resolve_binary_mapping(class_names: List[str], positive_class_name: str = POSITIVE_CLASS_NAME) -> Tuple[int, str]:
+    if positive_class_name not in class_names:
+        raise ValueError(f'La clase positiva "{positive_class_name}" no existe en {class_names}')
+    positive_label_idx = class_names.index(positive_class_name)
+    negative_names = [name for name in class_names if name != positive_class_name]
+    if not negative_names:
+        raise ValueError(f'No se encontro clase negativa en {class_names}')
+    return positive_label_idx, negative_names[0]
+
+
 class DogDetector(nn.Module):
     """Misma arquitectura que la CNN de TensorFlow: 4 bloques + GAP, salida 1 logit."""
 
@@ -219,14 +236,14 @@ class BinaryFocalLoss(nn.Module):
         return focal.mean()
 
 
-def run_epoch(model, loader, criterion, optimizer=None) -> Tuple[float, float]:
+def run_epoch(model, loader, criterion, positive_label_idx: int, optimizer=None) -> Tuple[float, float]:
     training = optimizer is not None
     model.train(training)
     total_loss = total_correct = total = 0
     with torch.set_grad_enabled(training):
         for images, labels in loader:
             images = images.to(DEVICE, non_blocking=True)
-            targets = labels.float().unsqueeze(1).to(DEVICE, non_blocking=True)
+            targets = (labels == positive_label_idx).float().unsqueeze(1).to(DEVICE, non_blocking=True)
             if training:
                 optimizer.zero_grad()
             logits = model(images)
@@ -241,7 +258,7 @@ def run_epoch(model, loader, criterion, optimizer=None) -> Tuple[float, float]:
 
 
 @torch.no_grad()
-def evaluate(model, loader, class_names: List[str], save_path: Path) -> Dict[str, object]:
+def evaluate(model, loader, class_names: List[str], positive_label_idx: int, save_path: Path) -> Dict[str, object]:
     model.eval()
     probs, trues = [], []
     for images, labels in loader:
@@ -250,7 +267,12 @@ def evaluate(model, loader, class_names: List[str], save_path: Path) -> Dict[str
         trues.append(labels.numpy().ravel())
     prob = np.concatenate(probs)
     true = np.concatenate(trues).astype(int)
+    true = (true == positive_label_idx).astype(int)
     pred = (prob >= 0.5).astype(int)
+
+    positive_name = class_names[positive_label_idx]
+    negative_name = next(name for i, name in enumerate(class_names) if i != positive_label_idx)
+    binary_class_names = [negative_name, positive_name]
 
     matrix = sk_confusion_matrix(true, pred, labels=[0, 1])
     accuracy = float(accuracy_score(true, pred))
@@ -263,8 +285,8 @@ def evaluate(model, loader, class_names: List[str], save_path: Path) -> Dict[str
     im = ax.imshow(matrix, cmap='Blues')
     ax.set_xticks([0, 1])
     ax.set_yticks([0, 1])
-    ax.set_xticklabels(class_names)
-    ax.set_yticklabels(class_names)
+    ax.set_xticklabels(binary_class_names)
+    ax.set_yticklabels(binary_class_names)
     ax.set_xlabel('Predicho')
     ax.set_ylabel('Real')
     ax.set_title('Matriz de confusión')
@@ -276,13 +298,22 @@ def evaluate(model, loader, class_names: List[str], save_path: Path) -> Dict[str
     fig.savefig(save_path, dpi=120)
     plt.close(fig)
 
-    print(f'\nClases: {class_names}')
+    print(f'\nClases binarias [0,1]: {binary_class_names} | positiva={positive_name}')
     print('Matriz de confusión (filas=real, columnas=predicho):')
     print(matrix)
     print(f'Accuracy en validación: {accuracy:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f} | F1: {f1:.4f} | AUC: {auc:.4f}')
     print('Matriz de confusión guardada en', save_path)
-    print('Interpretación: recall mide cobertura de la clase positiva; precision mide cuántos positivos predichos son correctos.')
-    return {'accuracy': accuracy, 'precision': precision, 'recall': recall, 'f1': f1, 'auc': auc, 'confusion_matrix': matrix, 'class_names': class_names}
+    print(f'Interpretación: recall mide cobertura de la clase positiva ({positive_name}); precision mide cuántos positivos predichos son correctos.')
+    return {
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'auc': auc,
+        'confusion_matrix': matrix,
+        'class_names': binary_class_names,
+        'positive_class': positive_name,
+    }
 
 
 def plot_history(history: Dict[str, List[float]], save_path: Path) -> None:
@@ -299,8 +330,10 @@ def plot_history(history: Dict[str, List[float]], save_path: Path) -> None:
 
 
 def train_model(config: Config, train_loader: DataLoader, valid_loader: DataLoader, spec: ModelSpec,
-                hyperparams: Dict[str, object], epochs: int, class_counts: np.ndarray) -> Tuple[torch.nn.Module, Dict[str, List[float]]]:
+                hyperparams: Dict[str, object], epochs: int, class_counts: np.ndarray,
+                positive_label_idx: int) -> Tuple[torch.nn.Module, Dict[str, List[float]]]:
     set_seed(config.seed)
+    print(f'[{spec.name}] Iniciando entrenamiento en {device_label()} | epochs={epochs} | batch_size={config.batch_size}', flush=True)
     model = DogDetector(
         filters=spec.filters,
         convs_per_block=spec.convs_per_block,
@@ -309,8 +342,8 @@ def train_model(config: Config, train_loader: DataLoader, valid_loader: DataLoad
         dense_units=int(hyperparams['dense_units']),
     ).to(DEVICE)
     if spec.imbalance == 'pos_weight':
-        pos_count = max(int(class_counts[1]), 1)
-        neg_count = max(int(class_counts[0]), 1)
+        pos_count = max(int(class_counts[positive_label_idx]), 1)
+        neg_count = max(int(class_counts.sum() - pos_count), 1)
         criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([neg_count / pos_count], dtype=torch.float32, device=DEVICE))
     elif spec.imbalance == 'focal_loss':
         criterion = BinaryFocalLoss(gamma=2.0, alpha=0.25)
@@ -329,11 +362,17 @@ def train_model(config: Config, train_loader: DataLoader, valid_loader: DataLoad
     best_state = copy.deepcopy(model.state_dict())
     epochs_no_improve = 0
     for epoch in range(1, epochs + 1):
-        train_loss, train_acc = run_epoch(model, train_loader, criterion, optimizer)
-        val_loss, val_acc = run_epoch(model, valid_loader, criterion, None)
+        train_loss, train_acc = run_epoch(model, train_loader, criterion, positive_label_idx, optimizer)
+        val_loss, val_acc = run_epoch(model, valid_loader, criterion, positive_label_idx, None)
         scheduler.step(val_loss)
         for key, value in zip(history, (train_loss, train_acc, val_loss, val_acc)):
             history[key].append(value)
+        print(
+            f'[{spec.name}] Epoch {epoch:02d}/{epochs:02d} | '
+            f'train_loss={train_loss:.4f} train_acc={train_acc:.4f} | '
+            f'val_loss={val_loss:.4f} val_acc={val_acc:.4f}',
+            flush=True,
+        )
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_state = copy.deepcopy(model.state_dict())
@@ -341,12 +380,14 @@ def train_model(config: Config, train_loader: DataLoader, valid_loader: DataLoad
         else:
             epochs_no_improve += 1
             if epochs_no_improve >= max(2, config.patience // 2):
+                print(f'[{spec.name}] Early stopping activado en epoch {epoch}', flush=True)
                 break
     model.load_state_dict(best_state)
     return model, history
 
 
-def run_optuna(config: Config, train_loader: DataLoader, valid_loader: DataLoader, spec: ModelSpec, class_counts: np.ndarray) -> optuna.study.Study:
+def run_optuna(config: Config, train_loader: DataLoader, valid_loader: DataLoader, spec: ModelSpec,
+               class_counts: np.ndarray, positive_label_idx: int) -> optuna.study.Study:
     print(f'Ejecutando Optuna para PyTorch ({spec.name})...')
 
     def objective(trial: optuna.Trial) -> float:
@@ -356,7 +397,7 @@ def run_optuna(config: Config, train_loader: DataLoader, valid_loader: DataLoade
             'dense_units': trial.suggest_categorical('dense_units', [128, 256]),
             'optimizer': trial.suggest_categorical('optimizer', ['adam', 'sgd', 'rmsprop']),
         }
-        _, history = train_model(config, train_loader, valid_loader, spec, hyperparams, config.optuna_epochs, class_counts)
+        _, history = train_model(config, train_loader, valid_loader, spec, hyperparams, config.optuna_epochs, class_counts, positive_label_idx)
         val_acc = history['val_acc']
         return float(max(val_acc)) if val_acc else 0.0
 
@@ -374,17 +415,20 @@ def run_single_variant(
 ) -> Dict[str, object]:
     spec = MODEL_SPECS[variant]
     paths = artifact_paths(variant)
-    print(f'PyTorch: {torch.__version__} | device: {DEVICE} | variante: {variant}')
+    print(f'PyTorch: {torch.__version__} | device: {device_label()} | variante: {variant} | usa_gpu={DEVICE.type == "cuda"}', flush=True)
     if not dataset_module.is_ready():
         raise SystemExit('No hay dataset. Corre primero: python dataset.py')
 
     set_seed(CONFIG.seed)
+    print(f'[{variant}] Preparando dataset y loaders...', flush=True)
     train_loader, valid_loader, class_names, _, class_counts = build_loaders(CONFIG, spec)
-    print('Clases:', class_names)
+    positive_label_idx, negative_class_name = resolve_binary_mapping(class_names, POSITIVE_CLASS_NAME)
+    print('Clases originales:', class_names)
+    print(f'Configuración binaria -> 0: {negative_class_name}, 1: {POSITIVE_CLASS_NAME}', flush=True)
 
     if optuna_trials > 0:
         config = Config(epochs=epochs, optuna_trials=optuna_trials, optuna_epochs=optuna_epochs)
-        study = run_optuna(config, train_loader, valid_loader, spec, class_counts)
+        study = run_optuna(config, train_loader, valid_loader, spec, class_counts, positive_label_idx)
         print(f'\nMejores hiperparámetros encontrados con Optuna para {variant}:')
         for key, value in study.best_params.items():
             print(f'  {key}: {value}')
@@ -399,9 +443,9 @@ def run_single_variant(
             'optimizer': 'adam',
         }
 
-    model, history = train_model(CONFIG, train_loader, valid_loader, spec, hyperparams, epochs, class_counts)
+    model, history = train_model(CONFIG, train_loader, valid_loader, spec, hyperparams, epochs, class_counts, positive_label_idx)
     plot_history(history, paths['history'])
-    results = evaluate(model, valid_loader, class_names, paths['confusion'])
+    results = evaluate(model, valid_loader, class_names, positive_label_idx, paths['confusion'])
     torch.save({'model_state_dict': model.state_dict(), 'variant': variant, 'spec': spec.__dict__, 'class_names': class_names}, paths['model'])
     with paths['metrics'].open('w', encoding='utf-8') as handle:
         json.dump({k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in results.items()}, handle, indent=2)

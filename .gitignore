@@ -19,7 +19,7 @@ htmlcov/
 *.tmp
 *.bak
 
-artifacts/
+
 data/downloads/
 data/dog_vs_notdog/raw/
 

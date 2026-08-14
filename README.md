@@ -6,8 +6,8 @@ dataset y la misma arquitectura, para comparar TensorFlow vs PyTorch.
 
 - **Dataset:** Cats vs Dogs (Microsoft), descarga directa **sin cuenta**. Positivo =
   perros, negativo = gatos. ~4000 imágenes por clase.
-- **Modelo:** CNN de 4 bloques convolucionales (~1.19M params) con data augmentation,
-  early stopping y LR scheduling. Idéntica en TF y PyTorch.
+- **Modelo:** ahora hay 6 entrypoints separados, 3 TensorFlow y 3 PyTorch, cada uno
+  con su propia variante de arquitectura y técnica para desbalance.
 
 ## Resultados
 
@@ -59,27 +59,54 @@ construye/detecta el dataset, entrena y muestra la matriz de confusión y las cu
 ### Opción B — Scripts
 ```bash
 python dataset.py               # descarga y ordena el dataset (idempotente)
-python train_tf.py --epochs 30      # entrena la versión TensorFlow
-python train_torch.py --epochs 30   # entrena la versión PyTorch
+python train_tf_small_class_weight.py
+python train_tf_medium_focal.py
+python train_tf_deep_oversample.py
+python train_torch_small_sampler.py
+python train_torch_medium_pos_weight.py
+python train_torch_deep_focal.py
 ```
 
 `python dataset.py` es **idempotente**: si el dataset ya está, no vuelve a descargar.
+
+Si quieres una guía paso a paso más directa, revisa [INSTRUCCIONES_EJECUCION.md](INSTRUCCIONES_EJECUCION.md).
+
+## Variantes disponibles
+
+| Archivo | Framework | Qué hace | Comando |
+|---|---|---|---|
+| `train_tf_small_class_weight.py` | TensorFlow | Variante compacta con `class_weight`. | `python train_tf_small_class_weight.py` |
+| `train_tf_medium_focal.py` | TensorFlow | Variante intermedia con Focal Loss. | `python train_tf_medium_focal.py` |
+| `train_tf_deep_oversample.py` | TensorFlow | Variante profunda con oversampling en `tf.data`. | `python train_tf_deep_oversample.py` |
+| `train_torch_small_sampler.py` | PyTorch | Variante compacta con `WeightedRandomSampler`. | `python train_torch_small_sampler.py` |
+| `train_torch_medium_pos_weight.py` | PyTorch | Variante intermedia con `pos_weight` en la pérdida. | `python train_torch_medium_pos_weight.py` |
+| `train_torch_deep_focal.py` | PyTorch | Variante profunda con Focal Loss. | `python train_torch_deep_focal.py` |
+
+Los scripts `train_tf.py` y `train_torch.py` quedan como núcleo compartido de implementación.
 
 ## Estructura
 
 ```
 dataset.py              # descarga + organiza el dataset (compartido, idempotente)
-train_tf.py             # entrenamiento TensorFlow (CNN desde cero)
-train_torch.py          # entrenamiento PyTorch (misma CNN)
+train_tf.py             # núcleo TensorFlow compartido
+train_torch.py          # núcleo PyTorch compartido
+train_tf_small_class_weight.py
+train_tf_medium_focal.py
+train_tf_deep_oversample.py
+train_torch_small_sampler.py
+train_torch_medium_pos_weight.py
+train_torch_deep_focal.py
 detector_tf.ipynb       # notebook orquestador — TensorFlow
 detector_torch.ipynb    # notebook orquestador — PyTorch
 train_tf_gpu.sh         # lanzador GPU opcional (TensorFlow, WSL2)
 train_torch_gpu.sh      # lanzador GPU opcional (PyTorch)
 requirements.txt
 artifacts/
-    dog_detector_tf.keras / dog_detector_tf_history.png
-    dog_detector_torch.pt / dog_detector_torch_history.png
+  dog_detector_tf_<variante>.keras / _history.png / _confusion_matrix.png / _metrics.json
+  dog_detector_torch_<variante>.pt / _history.png / _confusion_matrix.png / _metrics.json
 data/                   # dataset (generado; no versionado)
+recursos/               # ejemplos de técnicas para desbalance
+observaciones/          # comentarios de la primera entrega
 ```
 
 ## Notas sobre entornos (GPU)
