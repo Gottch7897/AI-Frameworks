@@ -1,99 +1,79 @@
-# Detector perro vs no-perro — TensorFlow y PyTorch (desde cero)
+# EcoSort — Clasificación de residuos reciclables (TensorFlow + PyTorch)
 
-Clasificador binario de imágenes — **¿es un perro o no?** — implementado en **ambos
-frameworks** con una CNN **desde cero** (sin modelos preentrenados), sobre el mismo
-dataset y la misma arquitectura, para comparar TensorFlow vs PyTorch.
+Sistema de visión por computador que **clasifica el material de un residuo** a
+partir de una imagen o de la cámara: **plástico**, **vidrio** o **papel/cartón**.
+Cada material tiene su propio detector binario (uno-vs-resto), implementado en
+**TensorFlow y PyTorch** (misma arquitectura, CNN **desde cero**, sin preentrenar)
+para comparar frameworks.
 
-- **Dataset:** Cats vs Dogs (Microsoft), descarga directa **sin cuenta**. Positivo =
-  perros, negativo = gatos. ~4000 imágenes por clase.
-- **Modelo:** CNN de 4 bloques convolucionales (~1.19M params) con data augmentation,
-  early stopping y LR scheduling. Idéntica en TF y PyTorch.
+## Uso comercial
 
-## Resultados
+Pensado para **plantas de reciclaje y basureros inteligentes**: una cámara sobre
+la cinta transportadora identifica el material y acciona la separación automática,
+reduciendo el trabajo manual y la contaminación entre materiales. También aplicable
+a apps ciudadanas de reciclaje (apunta con el celular y te dice a qué contenedor va).
 
-| Métrica | TensorFlow | PyTorch |
-|---|---|---|
-| **Accuracy (val)** | 86.3% | 88.5% |
-| **AUC** | 0.932 | 0.956 |
-| Parámetros | 1,194,721 | 1,192,993 |
-| Dispositivo | GPU (GTX 1650 Ti) | GPU (GTX 1650 Ti) |
+## Los 3 modelos
 
-Ambos frameworks alcanzan un detector sólido desde cero (~86–88%). La pequeña
-diferencia está dentro de la variación normal (split aleatorio y LR scheduling), no
-refleja superioridad de un framework sobre otro.
+| Modelo | Positivo | Negativo | Balance |
+|---|---|---|---|
+| **plástico** | plastic | resto | balanceado (482/482) |
+| **vidrio** | glass | resto | **desequilibrado** (501/2026) |
+| **papel** | paper + cardboard | resto | balanceado (997/997) |
 
-## Requisitos
+El modelo de **vidrio se deja desequilibrado a propósito** para estudiar el efecto
+del desbalance de clases (ver `INFORME.md`).
 
-- Python 3.11–3.12
-- Dependencias de `requirements.txt` (TensorFlow, PyTorch, NumPy, etc.).
-- GPU **opcional** — acelera mucho, pero todo corre en CPU igual.
+## Requisitos e instalación
 
-## Instalación
-
+- Python 3.11–3.12. GPU **opcional** (todo corre en CPU).
 ```bash
 python -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Si vas a usar **TensorFlow con GPU**, crea un entorno aparte y reinstala con el
-build CUDA de TensorFlow (`tensorflow[and-cuda]`). En el notebook o script de
-TensorFlow, el arranque GPU ya está preparado para buscar ese entorno dedicado.
+## Cómo correr (scripts)
 
-## Cómo correr
-
-### Opción A — Notebooks (recomendada)
-- `detector_tf.ipynb` → versión **TensorFlow**.
-- `detector_torch.ipynb` → versión **PyTorch**.
-
-Abre el que quieras y ejecuta todas las celdas ("Run All"): verifica dependencias,
-construye/detecta el dataset, entrena y muestra la matriz de confusión y las curvas.
-
-
-1. Ejecuta las celdas iniciales en orden para cargar dependencias, preparar el dataset y entrenar el modelo.
-2. Ejecuta la celda de resultados para ver las métricas finales y la matriz de confusión en texto.
-3. Ejecuta la celda que guarda la matriz de confusión para generar la imagen en `artifacts/`.
-4. Ejecuta la celda de inferencia, cambia la ruta de ejemplo por tu foto (formato .jpg) y llama a la función `predict_image(...)`.
-5. La salida te devuelve la probabilidad de `dog` y la etiqueta final (`dog` o `not_dog`).
-
-### Opción B — Scripts
 ```bash
-python dataset.py               # descarga y ordena el dataset (idempotente)
-python train_tf.py --epochs 30      # entrena la versión TensorFlow
-python train_torch.py --epochs 30   # entrena la versión PyTorch
-```
+# 1) Datos: descarga TrashNet y arma los 3 datasets (idempotente, sin cuenta)
+python dataset.py
 
-`python dataset.py` es **idempotente**: si el dataset ya está, no vuelve a descargar.
+# 2) Entrenar (un modelo por material y framework)
+python train_tf.py    --target plastico --epochs 25
+python train_torch.py --target vidrio   --epochs 25
+
+# 2b) Con búsqueda de hiperparámetros (Optuna)
+python train_tf.py --target papel --epochs 25 --optuna-trials 8 --optuna-epochs 8
+
+# 3) Consumo: clasificar imágenes
+python predict.py foto.jpg
+python predict.py --framework torch foto.jpg
+
+# 4) Cámara en vivo (OpenCV)
+python camara.py                     # webcam
+python camara.py --source foto.jpg --save salida.jpg   # probar sin cámara
+```
 
 ## Estructura
 
 ```
-dataset.py              # descarga + organiza el dataset (compartido, idempotente)
-train_tf.py             # entrenamiento TensorFlow (CNN desde cero)
-train_torch.py          # entrenamiento PyTorch (misma CNN)
-detector_tf.ipynb       # notebook orquestador — TensorFlow
-detector_torch.ipynb    # notebook orquestador — PyTorch
-train_tf_gpu.sh         # lanzador GPU opcional (TensorFlow, WSL2)
-train_torch_gpu.sh      # lanzador GPU opcional (PyTorch)
+dataset.py          # descarga TrashNet + arma los 3 datasets binarios
+train_tf.py         # entrenamiento TensorFlow (--target)  + Optuna
+train_torch.py      # entrenamiento PyTorch (--target)     + Optuna
+ecosort_infer.py    # lógica de inferencia compartida (carga los 3 modelos)
+predict.py          # consumo del modelo por imágenes
+camara.py           # clasificación en vivo con OpenCV
 requirements.txt
-artifacts/
-    dog_detector_tf.keras / dog_detector_tf_history.png
-    dog_detector_torch.pt / dog_detector_torch_history.png
-data/                   # dataset (generado; no versionado)
+INFORME.md          # metodología, resultados, análisis y plan de acción
+artifacts/          # modelos entrenados + gráficas + matrices de confusión
+data/               # datasets (generados; no versionados)
 ```
-
-## Notas sobre entornos (GPU)
-
-En CPU, TensorFlow y PyTorch conviven en un mismo entorno sin problema (basta el
-`requirements.txt`). Para **GPU** conviene un venv por framework, porque cada uno trae
-sus propias librerías CUDA y pueden chocar:
-
-- `venv-gpu` con `tensorflow[and-cuda]` → usar `./train_tf_gpu.sh`.
-- `venv-torch` con `torch` (CUDA) → usar `./train_torch_gpu.sh`.
 
 ## Reproducibilidad
 
-- El muestreo del dataset usa un **seed fijo** → siempre las mismas imágenes.
-- Las semillas de entrenamiento están fijadas. En GPU hay algo de no-determinismo
-  (cuDNN), así que los números salen **muy parecidos, no idénticos** entre corridas
-  (normal en deep learning). Rango esperado: ~85–89% de accuracy.
+- El muestreo del dataset usa **seed fijo** → siempre las mismas imágenes.
+- Semillas de entrenamiento fijadas. En GPU hay algo de no-determinismo (cuDNN),
+  así que los números salen **muy parecidos, no idénticos** entre corridas.
+- Los entornos GPU van separados por framework (`venv-gpu` para TF con
+  `tensorflow[and-cuda]`, `venv-torch` para PyTorch) para evitar choques de CUDA.

@@ -1,13 +1,13 @@
-"""Entrena el detector perro vs no-perro con una CNN **desde cero** en PyTorch.
+"""EcoSort — entrena un detector binario de material (PyTorch, desde cero).
 
-Réplica del modelo de `train_tf.py` para comparar frameworks sobre el
-MISMO dataset: misma arquitectura (4 bloques conv + GlobalAveragePooling), data
-augmentation, early stopping y LR scheduling. Usa GPU si está disponible.
+Réplica del modelo de `train_tf.py` para comparar frameworks sobre el MISMO
+dataset. Un modelo por material: `--target {plastico,vidrio,papel}`. Misma CNN
+(4 bloques + GlobalAveragePooling), augmentation, `pos_weight` para el desbalance,
+early stopping y LR scheduling. Opcional: Optuna.
 
 Uso:
-    python train_torch.py                # 30 epochs
-    python train_torch.py --epochs 40
-    python train_torch.py --optuna-trials 8 --optuna-epochs 4
+    python train_torch.py --target plastico --epochs 25
+    python train_torch.py --target vidrio --epochs 25 --optuna-trials 10 --optuna-epochs 8
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
-import optuna
 import torch
 import torch.nn as nn
 from sklearn.metrics import roc_auc_score
@@ -34,34 +33,49 @@ from torchvision import datasets, transforms
 
 import dataset as dataset_module
 
+try:
+    import optuna  # solo para --optuna-trials
+except ImportError:
+    optuna = None
+
 
 @dataclass(frozen=True)
 class Config:
     image_size: int = 224
     batch_size: int = 32
-    epochs: int = 30
+    epochs: int = 25
     learning_rate: float = 1e-3
     dropout: float = 0.4
     validation_split: float = 0.2
-    patience: int = 10
+    patience: int = 8
     seed: int = 42
     num_workers: int = 4
     optuna_trials: int = 0
-    optuna_epochs: int = 4
-    optuna_study_name: str = 'dog_detector_torch'
+    optuna_epochs: int = 6
 
 
 CONFIG = Config()
 PROJECT_ROOT = Path(__file__).resolve().parent
-DATA_ROOT = dataset_module.RAW_ROOT
 ARTIFACTS_DIR = PROJECT_ROOT / 'artifacts'
-MODEL_PATH = ARTIFACTS_DIR / 'dog_detector_torch.pt'
-HISTORY_PLOT = ARTIFACTS_DIR / 'dog_detector_torch_history.png'
-CONFUSION_MATRIX_PLOT = ARTIFACTS_DIR / 'dog_detector_torch_confusion_matrix.png'
-OPTUNA_BEST_PARAMS_PATH = ARTIFACTS_DIR / 'dog_detector_torch_optuna_best_params.json'
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Rutas dependientes del material; se fijan en run() vía configure_target().
+DATA_ROOT: Path = None
+MODEL_PATH: Path = None
+HISTORY_PLOT: Path = None
+CONFUSION_MATRIX_PLOT: Path = None
+OPTUNA_BEST_PARAMS_PATH: Path = None
+
+
+def configure_target(target: str) -> None:
+    global DATA_ROOT, MODEL_PATH, HISTORY_PLOT, CONFUSION_MATRIX_PLOT, OPTUNA_BEST_PARAMS_PATH
+    DATA_ROOT = dataset_module.raw_root(target)
+    stem = f'ecosort_{target}_torch'
+    MODEL_PATH = ARTIFACTS_DIR / f'{stem}.pt'
+    HISTORY_PLOT = ARTIFACTS_DIR / f'{stem}_history.png'
+    CONFUSION_MATRIX_PLOT = ARTIFACTS_DIR / f'{stem}_confusion_matrix.png'
+    OPTUNA_BEST_PARAMS_PATH = ARTIFACTS_DIR / f'{stem}_optuna_best_params.json'
 
 
 def set_seed(seed: int) -> None:
@@ -72,7 +86,6 @@ def set_seed(seed: int) -> None:
 
 
 def build_loaders(config: Config) -> Tuple[DataLoader, DataLoader, List[str]]:
-    """ImageFolder + split 80/20 con seed fijo. ToTensor escala a [0,1] (como TF)."""
     size = config.image_size
     train_tf = transforms.Compose([
         transforms.Resize((size, size)),
@@ -81,10 +94,7 @@ def build_loaders(config: Config) -> Tuple[DataLoader, DataLoader, List[str]]:
         transforms.ColorJitter(contrast=0.2),
         transforms.ToTensor(),
     ])
-    eval_tf = transforms.Compose([
-        transforms.Resize((size, size)),
-        transforms.ToTensor(),
-    ])
+    eval_tf = transforms.Compose([transforms.Resize((size, size)), transforms.ToTensor()])
 
     full_train = datasets.ImageFolder(str(DATA_ROOT), transform=train_tf)
     full_eval = datasets.ImageFolder(str(DATA_ROOT), transform=eval_tf)
@@ -94,18 +104,15 @@ def build_loaders(config: Config) -> Tuple[DataLoader, DataLoader, List[str]]:
     n_val = int(n * config.validation_split)
     val_idx, train_idx = perm[:n_val], perm[n_val:]
 
-    train_ds = Subset(full_train, train_idx)
-    valid_ds = Subset(full_eval, val_idx)
-
     pin = DEVICE.type == 'cuda'
-    train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True,
+    train_loader = DataLoader(Subset(full_train, train_idx), batch_size=config.batch_size, shuffle=True,
                               num_workers=config.num_workers, pin_memory=pin)
-    valid_loader = DataLoader(valid_ds, batch_size=config.batch_size, shuffle=False,
+    valid_loader = DataLoader(Subset(full_eval, val_idx), batch_size=config.batch_size, shuffle=False,
                               num_workers=config.num_workers, pin_memory=pin)
     return train_loader, valid_loader, full_train.classes
 
 
-class DogDetector(nn.Module):
+class MaterialDetector(nn.Module):
     """Misma arquitectura que la CNN de TensorFlow: 4 bloques + GAP, salida 1 logit."""
 
     def __init__(self, dropout: float = 0.4, dense_units: int = 256) -> None:
@@ -122,20 +129,24 @@ class DogDetector(nn.Module):
             return nn.Sequential(*layers)
 
         self.features = nn.Sequential(
-            block(3, 32, 1, 0.10),
-            block(32, 64, 1, 0.15),
-            block(64, 128, 2, 0.20),
-            block(128, 256, 2, 0.30),
+            block(3, 32, 1, 0.10), block(32, 64, 1, 0.15),
+            block(64, 128, 2, 0.20), block(128, 256, 2, 0.30),
         )
         self.head = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
+            nn.AdaptiveAvgPool2d(1), nn.Flatten(),
             nn.Linear(256, dense_units), nn.ReLU(inplace=True), nn.Dropout(dropout),
             nn.Linear(dense_units, 1),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.head(self.features(x))
+
+
+def pos_weight_from_dirs(class_names: List[str]) -> torch.Tensor:
+    """Peso de la clase positiva para BCEWithLogitsLoss (maneja el desbalance)."""
+    counts = [len(dataset_module._list_images(DATA_ROOT / name)) for name in class_names]
+    neg, pos = counts[0], counts[1]
+    return torch.tensor([neg / pos if pos else 1.0], device=DEVICE)
 
 
 def run_epoch(model, loader, criterion, optimizer=None) -> Tuple[float, float]:
@@ -164,8 +175,7 @@ def evaluate(model, loader, class_names: List[str]) -> Dict[str, object]:
     model.eval()
     probs, trues = [], []
     for images, labels in loader:
-        logits = model(images.to(DEVICE))
-        probs.append(torch.sigmoid(logits).cpu().numpy().ravel())
+        probs.append(torch.sigmoid(model(images.to(DEVICE))).cpu().numpy().ravel())
         trues.append(labels.numpy().ravel())
     prob = np.concatenate(probs)
     true = np.concatenate(trues).astype(int)
@@ -175,31 +185,31 @@ def evaluate(model, loader, class_names: List[str]) -> Dict[str, object]:
     for t, p in zip(true, pred):
         matrix[t, p] += 1
     accuracy = float((pred == true).mean())
-    auc = float(roc_auc_score(true, prob))
+    auc = float(roc_auc_score(true, prob)) if len(set(true)) > 1 else 0.0
+    tp = int(((pred == 1) & (true == 1)).sum())
+    fp = int(((pred == 1) & (true == 0)).sum())
+    fn = int(((pred == 0) & (true == 1)).sum())
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
 
     fig, ax = plt.subplots(figsize=(5, 4))
     im = ax.imshow(matrix, cmap='Blues')
-    ax.set_xticks([0, 1])
-    ax.set_yticks([0, 1])
-    ax.set_xticklabels(class_names)
-    ax.set_yticklabels(class_names)
-    ax.set_xlabel('Predicho')
-    ax.set_ylabel('Real')
-    ax.set_title('Matriz de confusión')
-    for i in range(matrix.shape[0]):
-        for j in range(matrix.shape[1]):
+    ax.set_xticks([0, 1]); ax.set_yticks([0, 1])
+    ax.set_xticklabels(class_names); ax.set_yticklabels(class_names)
+    ax.set_xlabel('Predicho'); ax.set_ylabel('Real'); ax.set_title('Matriz de confusión')
+    for i in range(2):
+        for j in range(2):
             ax.text(j, i, str(matrix[i, j]), ha='center', va='center', color='black')
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    fig.tight_layout()
-    fig.savefig(CONFUSION_MATRIX_PLOT, dpi=120)
-    plt.close(fig)
+    fig.tight_layout(); fig.savefig(CONFUSION_MATRIX_PLOT, dpi=120); plt.close(fig)
 
     print(f'\nClases: {class_names}')
     print('Matriz de confusión (filas=real, columnas=predicho):')
     print(matrix)
-    print(f'Accuracy en validación: {accuracy:.4f} | AUC: {auc:.4f}')
+    print(f'Accuracy: {accuracy:.4f} | AUC: {auc:.4f} | precision(+): {precision:.4f} | recall(+): {recall:.4f}')
     print('Matriz de confusión guardada en', CONFUSION_MATRIX_PLOT)
-    return {'accuracy': accuracy, 'auc': auc, 'confusion_matrix': matrix, 'class_names': class_names}
+    return {'accuracy': accuracy, 'auc': auc, 'precision': precision, 'recall': recall,
+            'confusion_matrix': matrix, 'class_names': class_names}
 
 
 def plot_history(history: Dict[str, List[float]], save_path: Path) -> None:
@@ -215,24 +225,23 @@ def plot_history(history: Dict[str, List[float]], save_path: Path) -> None:
     print('Gráfica guardada en', save_path)
 
 
-def train_model(config: Config, train_loader: DataLoader, valid_loader: DataLoader, class_names: List[str],
-                hyperparams: Dict[str, object], epochs: int) -> Tuple[torch.nn.Module, Dict[str, List[float]]]:
+def train_model(config, train_loader, valid_loader, class_names, hyperparams, epochs):
     set_seed(config.seed)
-    model = DogDetector(dropout=float(hyperparams['dropout']), dense_units=int(hyperparams['dense_units'])).to(DEVICE)
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer_name = str(hyperparams['optimizer'])
+    model = MaterialDetector(float(hyperparams['dropout']), int(hyperparams['dense_units'])).to(DEVICE)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_from_dirs(class_names))
+    lr = float(hyperparams['learning_rate'])
     optimizer = {
-        'adam': torch.optim.Adam(model.parameters(), lr=float(hyperparams['learning_rate'])),
-        'sgd': torch.optim.SGD(model.parameters(), lr=float(hyperparams['learning_rate']), momentum=0.9),
-        'rmsprop': torch.optim.RMSprop(model.parameters(), lr=float(hyperparams['learning_rate'])),
-    }[optimizer_name]
+        'adam': torch.optim.Adam(model.parameters(), lr=lr),
+        'sgd': torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9),
+        'rmsprop': torch.optim.RMSprop(model.parameters(), lr=lr),
+    }[str(hyperparams['optimizer'])]
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-5)
 
     history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
     best_val_loss = float('inf')
     best_state = copy.deepcopy(model.state_dict())
     epochs_no_improve = 0
-    for epoch in range(1, epochs + 1):
+    for _ in range(1, epochs + 1):
         train_loss, train_acc = run_epoch(model, train_loader, criterion, optimizer)
         val_loss, val_acc = run_epoch(model, valid_loader, criterion, None)
         scheduler.step(val_loss)
@@ -244,60 +253,59 @@ def train_model(config: Config, train_loader: DataLoader, valid_loader: DataLoad
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
-            if epochs_no_improve >= max(2, config.patience // 2):
+            if epochs_no_improve >= config.patience:
                 break
     model.load_state_dict(best_state)
     return model, history
 
 
-def run_optuna(config: Config, train_loader: DataLoader, valid_loader: DataLoader, class_names: List[str]) -> optuna.study.Study:
+def run_optuna(config: Config, train_loader, valid_loader, class_names):
+    if optuna is None:
+        raise SystemExit('Optuna no está instalado. Instálalo con: pip install optuna')
     print('Ejecutando Optuna para PyTorch...')
 
-    def objective(trial: optuna.Trial) -> float:
+    def objective(trial):
         hyperparams = {
             'learning_rate': trial.suggest_float('learning_rate', 1e-4, 1e-2, log=True),
             'dropout': trial.suggest_float('dropout', 0.15, 0.5),
-            'dense_units': trial.suggest_categorical('dense_units', [128, 256]),
+            'dense_units': trial.suggest_categorical('dense_units', [64, 128, 256]),
             'optimizer': trial.suggest_categorical('optimizer', ['adam', 'sgd', 'rmsprop']),
         }
         _, history = train_model(config, train_loader, valid_loader, class_names, hyperparams, config.optuna_epochs)
-        val_acc = history['val_acc']
-        return float(max(val_acc)) if val_acc else 0.0
+        return float(max(history['val_acc'])) if history['val_acc'] else 0.0
 
     sampler = optuna.samplers.TPESampler(seed=config.seed)
-    study = optuna.create_study(direction='maximize', sampler=sampler, study_name=config.optuna_study_name)
+    study = optuna.create_study(direction='maximize', sampler=sampler, study_name='ecosort_torch')
     study.optimize(objective, n_trials=config.optuna_trials, show_progress_bar=False)
     return study
 
 
-def run(epochs: int = CONFIG.epochs, optuna_trials: int = CONFIG.optuna_trials,
+def run(target: str, epochs: int = CONFIG.epochs, optuna_trials: int = CONFIG.optuna_trials,
         optuna_epochs: int = CONFIG.optuna_epochs) -> Dict[str, object]:
-    print('PyTorch:', torch.__version__, '| device:', DEVICE)
-    if not dataset_module.is_ready():
-        raise SystemExit('No hay dataset. Corre primero: python dataset.py')
+    configure_target(target)
+    print(f'== EcoSort PyTorch | material: {target} | device: {DEVICE} ==')
+
+    if not dataset_module.is_ready(target):
+        raise SystemExit(f'No hay dataset para {target}. Corre: python dataset.py --target {target}')
 
     set_seed(CONFIG.seed)
     train_loader, valid_loader, class_names = build_loaders(CONFIG)
     print('Clases:', class_names)
 
     if optuna_trials > 0:
-        config = Config(epochs=epochs, optuna_trials=optuna_trials, optuna_epochs=optuna_epochs)
-        study = run_optuna(config, train_loader, valid_loader, class_names)
-        print('\nMejores hiperparámetros encontrados con Optuna:')
-        for key, value in study.best_params.items():
-            print(f'  {key}: {value}')
-        with OPTUNA_BEST_PARAMS_PATH.open('w', encoding='utf-8') as handle:
-            json.dump(study.best_params, handle, indent=2)
+        cfg = Config(optuna_trials=optuna_trials, optuna_epochs=optuna_epochs)
+        study = run_optuna(cfg, train_loader, valid_loader, class_names)
         hyperparams = study.best_params
+        print('\nMejores hiperparámetros (Optuna):')
+        for key, value in hyperparams.items():
+            print(f'  {key}: {value}')
+        OPTUNA_BEST_PARAMS_PATH.write_text(json.dumps(hyperparams, indent=2))
     else:
-        hyperparams = {
-            'learning_rate': CONFIG.learning_rate,
-            'dropout': CONFIG.dropout,
-            'dense_units': 256,
-            'optimizer': 'adam',
-        }
+        hyperparams = {'learning_rate': CONFIG.learning_rate, 'dropout': CONFIG.dropout,
+                       'dense_units': 256, 'optimizer': 'adam'}
 
     model, history = train_model(CONFIG, train_loader, valid_loader, class_names, hyperparams, epochs)
+    torch.save(model.state_dict(), MODEL_PATH)   # <-- se guarda de verdad (bug corregido)
     plot_history(history, HISTORY_PLOT)
     results = evaluate(model, valid_loader, class_names)
     print('\nModelo guardado en', MODEL_PATH)
@@ -305,12 +313,13 @@ def run(epochs: int = CONFIG.epochs, optuna_trials: int = CONFIG.optuna_trials,
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Entrena el detector perro vs no-perro en PyTorch.')
+    parser = argparse.ArgumentParser(description='EcoSort — entrena un detector de material (PyTorch, desde cero).')
+    parser.add_argument('--target', choices=dataset_module.ALL_TARGETS, required=True)
     parser.add_argument('--epochs', type=int, default=CONFIG.epochs)
     parser.add_argument('--optuna-trials', type=int, default=CONFIG.optuna_trials)
     parser.add_argument('--optuna-epochs', type=int, default=CONFIG.optuna_epochs)
     args = parser.parse_args()
-    run(epochs=args.epochs, optuna_trials=args.optuna_trials, optuna_epochs=args.optuna_epochs)
+    run(args.target, epochs=args.epochs, optuna_trials=args.optuna_trials, optuna_epochs=args.optuna_epochs)
 
 
 if __name__ == '__main__':

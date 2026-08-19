@@ -1,17 +1,17 @@
-"""Descarga y organiza el dataset del detector: perro vs no-perro.
+"""EcoSort — descarga y organiza el dataset de reciclaje (TrashNet).
 
-Fuente: **Cats vs Dogs (Microsoft)** — descarga directa, SIN cuenta. La clase
-positiva son perros y la negativa son gatos.
+Construye 3 datasets binarios (uno-vs-resto) para 3 detectores de material:
+**plástico**, **vidrio** y **papel**. El de **vidrio** se deja DESEQUILIBRADO a
+propósito (1-vs-resto sin balancear) para analizar el efecto del desbalance;
+los otros dos quedan balanceados.
 
-Diseñado para reproducibilidad:
-- **Idempotente**: si las carpetas ya tienen las imágenes, no vuelve a descargar
-  ni a reconstruir (detecta y sigue).
-- **Determinista**: el muestreo usa un `SEED` fijo, así siempre se eligen las
-  mismas imágenes por clase.
+Fuente: TrashNet (GitHub, descarga directa **SIN cuenta**).
+Diseñado para reproducibilidad: idempotente (no re-descarga) y con `SEED` fijo.
 
 Uso:
-    python dataset.py            # construye (o detecta) el dataset
-    python dataset.py --force    # fuerza reconstrucción
+    python dataset.py                 # construye los 3
+    python dataset.py --target vidrio # construye solo uno
+    python dataset.py --force         # reconstruye
 """
 
 from __future__ import annotations
@@ -21,113 +21,115 @@ import random
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-RAW_ROOT = PROJECT_ROOT / 'data' / 'dog_vs_notdog' / 'raw'
+ECOSORT_ROOT = PROJECT_ROOT / 'data' / 'ecosort'
 DOWNLOAD_DIR = PROJECT_ROOT / 'data' / 'downloads'
+TRASHNET_URL = 'https://github.com/garythung/trashnet/raw/master/data/dataset-resized.zip'
+TRASHNET_DIR = DOWNLOAD_DIR / 'dataset-resized'
 
-CATS_DOGS_URL = (
-    'https://download.microsoft.com/download/3/E/1/'
-    '3E1C3F21-ECDB-4869-8368-6DEBA77B919F/kagglecatsanddogs_5340.zip'
-)
-
-VALID_SUFFIXES = {'.jpg', '.jpeg', '.png', '.webp'}
-N_PER_CLASS = 4000
+VALID_SUFFIXES = {'.jpg', '.jpeg', '.png'}
 SEED = 42
-CLASSES = ('dog', 'not_dog')
+
+# material objetivo -> carpeta(s) de TrashNet que cuentan como POSITIVO
+MATERIALS: Dict[str, List[str]] = {
+    'plastico': ['plastic'],
+    'vidrio': ['glass'],
+    'papel': ['paper', 'cardboard'],
+}
+IMBALANCED_TARGET = 'vidrio'   # este se deja SIN balancear (clase minoritaria)
+ALL_TARGETS = list(MATERIALS)
 
 
 def _list_images(folder: Path) -> List[Path]:
     return [p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in VALID_SUFFIXES]
 
 
-def _download(url: str, dest: Path, min_size: int) -> Path:
+def raw_root(target: str) -> Path:
+    """Carpeta con las subcarpetas <material>/ y no_<material>/ de ese modelo."""
+    return ECOSORT_ROOT / target / 'raw'
+
+
+def _download_trashnet() -> Path:
     import urllib.request
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists() and dest.stat().st_size > min_size:
-        print('[dataset] descarga ya presente:', dest)
-        return dest
-    print('[dataset] descargando (~800 MB, una sola vez):', url)
-    urllib.request.urlretrieve(url, dest)
-    return dest
-
-
-def _clean_reencode(folder: Path) -> None:
-    """Re-codifica a JPEG limpio y descarta lo irrecuperable.
-
-    El set de Microsoft trae archivos que algunos decoders (TensorFlow) rechazan;
-    re-guardarlos con PIL produce JPEGs estándar y elimina los corruptos.
-    """
-    from PIL import Image
-    from tqdm.auto import tqdm
-
-    for image_path in tqdm(_list_images(folder), desc=f'validando {folder.name}'):
-        try:
-            with Image.open(image_path) as image:
-                image.convert('RGB').save(image_path, 'JPEG', quality=95)
-        except Exception:
-            image_path.unlink(missing_ok=True)
-
-
-def counts() -> Dict[str, int]:
-    return {c: len(_list_images(RAW_ROOT / c)) for c in CLASSES}
-
-
-def is_ready(n_per_class: int = N_PER_CLASS) -> bool:
-    """True si cada clase ya tiene al menos el 90% de las imágenes esperadas."""
-    threshold = int(n_per_class * 0.9)
-    return all((RAW_ROOT / c).exists() and len(_list_images(RAW_ROOT / c)) >= threshold for c in CLASSES)
-
-
-def build(n_per_class: int = N_PER_CLASS, seed: int = SEED, force: bool = False) -> Dict[str, int]:
-    """Construye (o detecta) el dataset perro vs no-perro. Devuelve conteos."""
-    if is_ready(n_per_class) and not force:
-        print('[dataset] ya está listo, no se re-descarga. Conteos:', counts())
-        return counts()
-
-    rng = random.Random(seed)
-
-    zip_path = _download(CATS_DOGS_URL, DOWNLOAD_DIR / 'kagglecatsanddogs.zip', min_size=700_000_000)
-    petimages = DOWNLOAD_DIR / 'PetImages'
-    if not (petimages / 'Dog').exists():
-        print('[dataset] extrayendo...')
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    zip_path = DOWNLOAD_DIR / 'trashnet.zip'
+    if not (zip_path.exists() and zip_path.stat().st_size > 40_000_000):
+        print('[ecosort] descargando TrashNet (~43 MB, una sola vez)...')
+        request = urllib.request.Request(TRASHNET_URL, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(request, timeout=180) as response, open(zip_path, 'wb') as handle:
+            shutil.copyfileobj(response, handle)
+    if not TRASHNET_DIR.exists():
+        print('[ecosort] extrayendo...')
         with zipfile.ZipFile(zip_path) as archive:
             archive.extractall(DOWNLOAD_DIR)
+    return TRASHNET_DIR
 
-    dogs = _list_images(petimages / 'Dog')
-    cats = _list_images(petimages / 'Cat')
-    rng.shuffle(dogs)
-    rng.shuffle(cats)
 
-    dog_dir = RAW_ROOT / 'dog'
-    notdog_dir = RAW_ROOT / 'not_dog'
-    for directory in (dog_dir, notdog_dir):
+def counts(target: str) -> Dict[str, int]:
+    root = raw_root(target)
+    return {d.name: len(_list_images(d)) for d in sorted(root.glob('*')) if d.is_dir()}
+
+
+def is_ready(target: str) -> bool:
+    root = raw_root(target)
+    pos, neg = root / target, root / f'no_{target}'
+    return pos.exists() and neg.exists() and bool(_list_images(pos)) and bool(_list_images(neg))
+
+
+def build_target(target: str, force: bool = False) -> Dict[str, int]:
+    """Construye el dataset binario <material> vs no_<material>."""
+    if is_ready(target) and not force:
+        print(f'[ecosort:{target}] ya está listo: {counts(target)}')
+        return counts(target)
+
+    source = _download_trashnet()
+    rng = random.Random(SEED)
+    positive_classes = MATERIALS[target]
+
+    positives: List[Path] = []
+    negatives: List[Path] = []
+    for folder in source.iterdir():
+        if not folder.is_dir():
+            continue
+        images = _list_images(folder)
+        (positives if folder.name in positive_classes else negatives).extend(images)
+
+    rng.shuffle(positives)
+    rng.shuffle(negatives)
+
+    # Balanceo: todos menos el objetivo desequilibrado igualan el nº de positivos.
+    if target != IMBALANCED_TARGET:
+        negatives = negatives[:len(positives)]
+
+    pos_dir = raw_root(target) / target
+    neg_dir = raw_root(target) / f'no_{target}'
+    for directory in (pos_dir, neg_dir):
+        if directory.exists():
+            shutil.rmtree(directory)
         directory.mkdir(parents=True, exist_ok=True)
 
-    def _copy(sources: List[Path], dest: Path, tag: str) -> None:
-        for i, src in enumerate(sources[:n_per_class]):
-            shutil.copy(src, dest / f'{tag}_{i:05d}{src.suffix.lower()}')
+    for i, path in enumerate(positives):
+        shutil.copy(path, pos_dir / f'{target}_{i:04d}{path.suffix.lower()}')
+    for i, path in enumerate(negatives):
+        shutil.copy(path, neg_dir / f'no_{i:04d}{path.suffix.lower()}')
 
-    print(f'[dataset] copiando {n_per_class} perros y {n_per_class} gatos...')
-    _copy(dogs, dog_dir, 'dog')
-    _copy(cats, notdog_dir, 'cat')
-
-    _clean_reencode(dog_dir)
-    _clean_reencode(notdog_dir)
-
-    result = counts()
-    print('[dataset] conteos finales:', result)
-    for name, total in result.items():
-        if total == 0:
-            raise RuntimeError(f'[dataset] la clase {name} quedó vacía.')
+    result = counts(target)
+    etiqueta = 'DESEQUILIBRADO' if target == IMBALANCED_TARGET else 'balanceado'
+    print(f'[ecosort:{target}] conteos finales ({etiqueta}): {result}')
     return result
 
 
+def build(target: Optional[str] = None, force: bool = False) -> Dict[str, Dict[str, int]]:
+    targets = [target] if target else ALL_TARGETS
+    return {t: build_target(t, force) for t in targets}
+
+
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Construye el dataset perro vs no-perro.')
+    parser = argparse.ArgumentParser(description='Construye los datasets de EcoSort (reciclaje).')
+    parser.add_argument('--target', choices=ALL_TARGETS, default=None, help='Un material; por defecto los 3.')
     parser.add_argument('--force', action='store_true', help='Reconstruir aunque ya exista.')
-    parser.add_argument('--n-per-class', type=int, default=N_PER_CLASS, help='Imágenes por clase.')
     args = parser.parse_args()
-    build(n_per_class=args.n_per_class, force=args.force)
+    print(build(target=args.target, force=args.force))
