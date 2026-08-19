@@ -43,6 +43,9 @@ python dataset.py
 python train_tf.py    --target plastico --epochs 25
 python train_torch.py --target vidrio   --epochs 25
 
+# TensorFlow con GPU en Linux/WSL2 (usa las librerías CUDA del venv)
+./train_tf_gpu.sh --target plastico --epochs 25
+
 # 2b) Con búsqueda de hiperparámetros (Optuna)
 python train_tf.py --target papel --epochs 25 --optuna-trials 8 --optuna-epochs 8
 
@@ -75,5 +78,6 @@ data/               # datasets (generados; no versionados)
 - El muestreo del dataset usa **seed fijo** → siempre las mismas imágenes.
 - Semillas de entrenamiento fijadas. En GPU hay algo de no-determinismo (cuDNN),
   así que los números salen **muy parecidos, no idénticos** entre corridas.
-- Los entornos GPU van separados por framework (`venv-gpu` para TF con
-  `tensorflow[and-cuda]`, `venv-torch` para PyTorch) para evitar choques de CUDA.
+- En Linux/WSL2, `train_tf_gpu.sh` prepara las librerías CUDA de
+  `tensorflow[and-cuda]` antes de iniciar Python; usa `venv/` del repositorio y,
+  como alternativa, `venv-gpu/` junto al repositorio.

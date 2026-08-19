@@ -1,7 +1,7 @@
 {
-  "learning_rate": 0.0005611516415334506,
-  "dropout": 0.4827500072434706,
+  "learning_rate": 0.00010549579566712062,
+  "dropout": 0.2827610125714093,
   "dense_units": 64,
-  "augment": true,
+  "augment": false,
   "optimizer": "adam"
 }

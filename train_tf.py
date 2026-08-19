@@ -37,7 +37,7 @@ except ImportError:
 @dataclass(frozen=True)
 class Config:
     image_size: Tuple[int, int] = (224, 224)
-    batch_size: int = 32
+    batch_size: int = 8
     epochs: int = 25
     learning_rate: float = 1e-3
     dropout: float = 0.4
@@ -53,7 +53,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 ARTIFACTS_DIR = PROJECT_ROOT / 'artifacts'
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
-os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '3')
 tf.get_logger().setLevel('ERROR')
 tf.keras.utils.set_random_seed(CONFIG.seed)
 
@@ -86,9 +85,8 @@ def build_datasets(config: Config) -> Tuple[tf.data.Dataset, tf.data.Dataset, Li
     class_names = train_ds.class_names
 
     normalize = tf.keras.layers.Rescaling(1.0 / 255)
-    autotune = tf.data.AUTOTUNE
-    train_ds = train_ds.map(lambda x, y: (normalize(x), y), num_parallel_calls=autotune).prefetch(autotune)
-    valid_ds = valid_ds.map(lambda x, y: (normalize(x), y), num_parallel_calls=autotune).prefetch(autotune)
+    train_ds = train_ds.map(lambda x, y: (normalize(x), y), num_parallel_calls=1).prefetch(1)
+    valid_ds = valid_ds.map(lambda x, y: (normalize(x), y), num_parallel_calls=1).prefetch(1)
     return train_ds, valid_ds, class_names
 
 

@@ -9,12 +9,15 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-VENV_GPU="$HERE/../venv-gpu"
+VENV_GPU="$HERE/venv"
+if [ ! -x "$VENV_GPU/bin/python" ]; then
+    VENV_GPU="$HERE/../venv-gpu"
+fi
 PY="python"
 
 if [ -x "$VENV_GPU/bin/python" ]; then
     PY="$VENV_GPU/bin/python"
-    NV="$VENV_GPU/lib/python3.12/site-packages/nvidia"
+    NV="$($PY -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/nvidia"
     LDP=""
     for d in "$NV"/*/lib; do LDP="$LDP:$d"; done
     export LD_LIBRARY_PATH="${LDP#:}:/usr/lib/wsl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
