@@ -4,8 +4,8 @@ Cada detector es binario (material vs no-material) y devuelve P(es ese material)
 El material predicho es el de mayor probabilidad. Sirve tanto para `predict.py`
 (imágenes) como para `camara.py` (cámara con OpenCV).
 
-Funciona con TensorFlow (`framework='tf'`, correr en el venv con tensorflow) o
-PyTorch (`framework='torch'`, correr en el venv-torch). La inferencia va en CPU.
+Funciona con TensorFlow (`framework='tf'`), PyTorch (`framework='torch'`) y
+ONNX (`framework='onnx-tf'` / `framework='onnx-torch'`). La inferencia va en CPU.
 """
 
 from __future__ import annotations
@@ -51,8 +51,16 @@ def load_models(framework: str = 'tf') -> Dict[str, object]:
             net.load_state_dict(torch.load(path, map_location='cpu'))
             net.eval()
             models[material] = net
+    elif framework in ('onnx-tf', 'onnx-torch'):
+        import onnxruntime as ort
+        source = 'tf' if framework == 'onnx-tf' else 'torch'
+        for material in MATERIALS:
+            path = ARTIFACTS / 'onnx' / source / f'ecosort_{material}.onnx'
+            if not path.exists():
+                raise SystemExit(f'Falta el modelo {path}. Ejecuta: python export_onnx.py --source {source}')
+            models[material] = ort.InferenceSession(str(path), providers=['CPUExecutionProvider'])
     else:
-        raise ValueError("framework debe ser 'tf' o 'torch'")
+        raise ValueError("framework debe ser 'tf', 'torch', 'onnx-tf' u 'onnx-torch'")
     return models
 
 
@@ -64,12 +72,18 @@ def predict_probs(models: Dict[str, object], framework: str, image) -> Dict[str,
         batch = x[None, ...]
         for material, model in models.items():
             probs[material] = float(model.predict(batch, verbose=0).ravel()[0])
-    else:
+    elif framework == 'torch':
         import torch
         tensor = torch.from_numpy(x.transpose(2, 0, 1)[None, ...])
         with torch.no_grad():
             for material, model in models.items():
                 probs[material] = float(torch.sigmoid(model(tensor)).item())
+    else:
+        batch = x[None, ...] if framework == 'onnx-tf' else x.transpose(2, 0, 1)[None, ...]
+        for material, session in models.items():
+            output = session.run(None, {'images': batch})[0]
+            value = float(np.asarray(output).ravel()[0])
+            probs[material] = value if framework == 'onnx-tf' else float(1.0 / (1.0 + np.exp(-value)))
     return probs
 
 

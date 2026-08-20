@@ -31,6 +31,8 @@ del desbalance de clases (ver `INFORME.md`).
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+# Opcional: exportar e inferir con ONNX
+pip install -r requirements-onnx.txt
 ```
 
 ## Cómo correr (scripts)
@@ -45,6 +47,13 @@ python train_torch.py --target vidrio   --epochs 25
 
 # TensorFlow con GPU en Linux/WSL2 (usa las librerías CUDA del venv)
 ./train_tf_gpu.sh --target plastico --epochs 25
+
+# Exportar modelos ya entrenados a ONNX
+python export_onnx.py --source all
+
+# Inferencia portable con ONNX Runtime
+python predict.py --framework onnx-tf foto.jpg
+python predict.py --framework onnx-torch foto.jpg
 
 # 2b) Con búsqueda de hiperparámetros (Optuna)
 python train_tf.py --target papel --epochs 25 --optuna-trials 8 --optuna-epochs 8
@@ -64,6 +73,7 @@ python camara.py --source foto.jpg --save salida.jpg   # probar sin cámara
 dataset.py          # descarga TrashNet + arma los 3 datasets binarios
 train_tf.py         # entrenamiento TensorFlow (--target)  + Optuna
 train_torch.py      # entrenamiento PyTorch (--target)     + Optuna
+export_onnx.py      # exportación de modelos a ONNX
 ecosort_infer.py    # lógica de inferencia compartida (carga los 3 modelos)
 predict.py          # consumo del modelo por imágenes
 camara.py           # clasificación en vivo con OpenCV
@@ -71,6 +81,7 @@ requirements.txt
 INFORME.md          # metodología, resultados, análisis y plan de acción
 artifacts/          # modelos entrenados + gráficas + matrices de confusión
 data/               # datasets (generados; no versionados)
+requirements-onnx.txt # dependencias opcionales de exportación e inferencia ONNX
 ```
 
 ## Reproducibilidad

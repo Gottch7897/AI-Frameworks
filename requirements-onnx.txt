@@ -1,0 +1,5 @@
+# Dependencias opcionales para exportar e inferir con ONNX
+onnx>=1.20,<1.22
+onnxruntime>=1.20
+tf2onnx>=1.16
+onnxscript>=0.2

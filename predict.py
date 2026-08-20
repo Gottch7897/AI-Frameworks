@@ -33,7 +33,7 @@ def gather_paths(images: List[str], directory: str | None) -> List[Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description='EcoSort — clasifica el material de una imagen.')
     parser.add_argument('images', nargs='*', help='Ruta(s) de imagen.')
-    parser.add_argument('--framework', choices=['tf', 'torch'], default='tf')
+    parser.add_argument('--framework', choices=['tf', 'torch', 'onnx-tf', 'onnx-torch'], default='tf')
     parser.add_argument('--dir', default=None, help='Clasificar todas las imágenes de una carpeta.')
     args = parser.parse_args()
 
