@@ -193,3 +193,21 @@
     color:          var(--ion-color-primary);
   }
 }
+
+/* --- Selector de modelo: contraste garantizado en claro y oscuro --- */
+ion-segment {
+  --background: rgba(128, 128, 128, 0.14);
+  border: 1px solid rgba(128, 128, 128, 0.28);
+  border-radius: 10px;
+}
+ion-segment-button {
+  --color:           var(--ion-text-color);
+  --color-checked:   #ffffff;
+  --indicator-color: var(--ion-color-success);
+  --border-radius:   8px;
+  min-height:        40px;
+  font-weight:       600;
+  text-transform:    none;
+  letter-spacing:    0;
+  opacity:           1;
+}

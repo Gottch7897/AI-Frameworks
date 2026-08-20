@@ -1,96 +1,55 @@
-# ionic-opencv-metrics
+# EcoSort — App móvil (Ionic + ONNX)
 
-App Ionic + Angular + OpenCV.js que captura la cámara y calcula **FPS** y **Sharpness** en tiempo real.
+App de reciclaje que **clasifica el material de un objeto desde la cámara** en vivo:
+**plástico / vidrio / papel**. Los modelos corren **100% en el dispositivo** con
+ONNX Runtime Web (WebAssembly) — sin servidor ni internet.
 
-## Stack
-
-| Librería           | Versión  | Rol                                    |
-|--------------------|----------|----------------------------------------|
-| Node.js            | ≥ 22     | Runtime                                |
-| Angular            | 18.x     | Framework frontend                     |
-| Ionic Angular      | 8.x      | UI components + routing                |
-| OpenCV.js          | 4.x      | Cálculo de nitidez (Laplaciano WASM)   |
-| TypeScript         | 5.4      | Lenguaje                               |
-| WebRTC             | nativo   | Captura de cámara (getUserMedia)       |
-
-## Instalación y ejecución
-
-```bash
-# Clonar o descomprimir el proyecto
-cd ionic-opencv-metrics
-
-# Instalar dependencias (requiere Node 22)
-npm install
-
-# Servidor de desarrollo en http://localhost:8100
-npm start
-```
-
-> La primera carga descarga opencv.js (~9 MB) desde el CDN de OpenCV.
-> Verás "OpenCV Cargando…" hasta que el módulo WASM esté listo.
+- **Framework:** Ionic 8 + Angular 18.
+- **Cámara:** `getUserMedia` (WebRTC) sobre canvas.
+- **Inferencia:** `onnxruntime-web` con los modelos exportados desde TensorFlow y
+  PyTorch (intercambiables desde la UI). Ver `../export_onnx.py`.
+- **Empaquetado nativo:** Capacitor → APK Android.
 
 ## Cómo funciona
+1. Se abre la cámara y se muestra un cuadro-guía central.
+2. Al presionar **"Analizar objeto"** se captura el frame, se recorta al centro,
+   se redimensiona a 224×224 y se corre en los 3 detectores ONNX.
+3. Se muestra el material más probable (con umbral + margen; si no hay uno claro,
+   dice "Acerca un objeto reciclable").
+4. Botón **TF ↔ PyTorch** para comparar ambos modelos en vivo.
 
-### FPS
-Calculado con `performance.now()` entre frames:
-```
-instantFps = 1000 / deltaMs
-fpsSmoothed = 0.85 * fpsSmoothed + 0.15 * instantFps
-```
-El suavizado exponencial evita oscilaciones bruscas en la lectura.
+Lógica de inferencia: `src/app/ecosort.service.ts`.
 
-### Sharpness (Nitidez)
-Varianza del Laplaciano — método estándar en visión computacional:
+## Correr en el navegador (desarrollo)
+```bash
+npm install
+npm start            # http://localhost:8100
 ```
-frame → escala de grises → filtro Laplaciano → varianza del resultado
-```
-Mayor varianza = más bordes detectados = imagen más nítida.
+Ábrelo en un equipo con webcam (o en el teléfono con la IP de la red).
 
-Rangos orientativos:
-- `< 50`   → Borrosa
-- `50–150` → Aceptable  
-- `150–300`→ Nítida
-- `> 300`  → Muy nítida
+## Compilar el APK (Android)
 
-### Gestión de memoria OpenCV
-OpenCV.js usa WASM con heap manual. Cada `cv.Mat` debe liberarse:
-```typescript
-const src = cv.imread(canvas);
-// ... procesar ...
-src.delete(); // obligatorio — no hay GC automático
-```
-
-### requestAnimationFrame fuera de NgZone
-El loop de frames corre fuera de la detección de cambios de Angular
-para no disparar re-renders en cada frame (~60/seg):
-```typescript
-this.zone.runOutsideAngular(() => this.processLoop());
-// Solo actualiza la UI cada N frames via zone.run()
-```
-
-## Estructura del proyecto
-
-```
-src/
-├── app/
-│   ├── home/
-│   │   ├── home.page.ts    ← lógica principal
-│   │   ├── home.page.html  ← template con canvas + métricas
-│   │   └── home.page.scss  ← estilos
-│   ├── opencv.service.ts   ← carga OpenCV.js y calcula sharpness
-│   ├── app.component.ts
-│   ├── app.config.ts
-│   └── app.routes.ts
-└── index.html              ← carga opencv.js desde CDN
-```
-
-## Despliegue en dispositivo móvil (Capacitor)
+Requiere **JDK 21** y **Android SDK** (Capacitor 7 usa Java 21, compileSdk 36).
 
 ```bash
-npm install @capacitor/core @capacitor/cli @capacitor/android
-npx cap init
-npx cap add android
+# 1) construir la web y sincronizar con Android
 npm run build
-npx cap sync
-npx cap open android
+npx cap sync android
+
+# 2) compilar el APK (ajusta JAVA_HOME / ANDROID_HOME a tu instalación)
+cd android
+JAVA_HOME=/ruta/al/jdk-21 ANDROID_HOME=/ruta/al/android-sdk ./gradlew assembleDebug
+```
+El APK queda en `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+> Alternativa sencilla: abrir la carpeta `android/` en **Android Studio** y
+> *Build → Build APK(s)* (trae JDK/SDK/Gradle).
+
+## Estructura
+```
+src/app/ecosort.service.ts   # carga los 6 modelos ONNX + inferencia (TF/PyTorch)
+src/app/home/home.page.ts    # cámara, loop de preview, botón Analizar, switch
+src/assets/models/{tf,torch} # modelos .onnx (offline)
+src/assets/ort/              # runtime WebAssembly de onnxruntime-web
+android/                     # proyecto Capacitor para el APK
 ```

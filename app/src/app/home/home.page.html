@@ -6,140 +6,125 @@
       @if (!modelReady()) {
         <ion-spinner name="dots" style="width:12px;height:12px;margin-right:4px"></ion-spinner>
       }
-      <ion-label>{{ framework().toUpperCase() }} {{ modelReady() ? '✓' : '…' }}</ion-label>
+      <ion-label>Modelos {{ modelReady() ? '✓' : '…' }}</ion-label>
     </ion-chip>
   </ion-toolbar>
 </ion-header>
 
-<ion-content>
+<ion-content class="ion-padding">
 
-  <video #videoEl autoplay playsinline muted
-         style="position:fixed; top:-9999px; left:-9999px; width:1px; height:1px;">
-  </video>
+  <!-- inputs ocultos: cámara y galería -->
+  <input #fileCamera type="file" accept="image/*" capture="environment" hidden (change)="onFile($event)">
+  <input #fileGallery type="file" accept="image/*" hidden (change)="onFile($event)">
 
-  <div class="canvas-wrap">
-    <canvas #canvasLive class="preview-canvas"></canvas>
+  <p style="text-align:center; color:var(--ion-color-medium); margin-top:0">
+    Detector de material reciclable — <b>plástico · vidrio · papel</b>
+  </p>
 
-    @if (appState() === 'idle') {
-      <div class="state-overlay">
-        <ion-icon name="videocam" class="big-icon"></ion-icon>
-        <p>Cámara inactiva</p>
-      </div>
-    }
-
-    @if (isRequesting()) {
-      <div class="state-overlay">
-        <ion-spinner name="crescent" style="width:48px;height:48px;color:#fff"></ion-spinner>
-        <p>Solicitando permiso…</p>
-        <small>Acepta el diálogo del navegador</small>
-      </div>
-    }
-
-    @if (isActive()) {
-      <div class="hud">
-        <span class="hud-pill" [attr.data-c]="fpsColor()">
-          {{ fps() }} FPS
-        </span>
-        <span class="hud-pill" [attr.data-c]="sharpnessColor()">
-          ⬡ {{ sharpness() }}
-        </span>
-        <span class="hud-frame">
-          #{{ frameCount() }}
-        </span>
-      </div>
-    }
+  <!-- botones de entrada -->
+  <div style="display:flex; gap:10px; margin-bottom:12px">
+    <ion-button expand="block" color="success" style="flex:1" (click)="abrirCamara()">
+      <ion-icon slot="start" name="camera"></ion-icon> Tomar foto
+    </ion-button>
+    <ion-button expand="block" color="medium" fill="outline" style="flex:1" (click)="abrirGaleria()">
+      <ion-icon slot="start" name="images"></ion-icon> Galería
+    </ion-button>
   </div>
 
-  <!-- Resultado EcoSort: material detectado -->
-  <ion-card class="m-card" style="margin:12px">
-    <ion-card-header>
-      <ion-card-subtitle>
-        <ion-icon name="color-wand"></ion-icon> Material detectado
-      </ion-card-subtitle>
-      <ion-card-title>
-        @if (!isActive()) {
-          <span style="color:var(--ion-color-medium)">—</span>
-        } @else if (material()) {
-          <span style="text-transform:uppercase; color:var(--ion-color-success); font-size:1.9rem">{{ material() }}</span>
-          <small style="color:var(--ion-color-medium)"> {{ Math.round(confidence() * 100) }}%</small>
-        } @else {
-          <span style="font-size:1.1rem; color:var(--ion-color-medium)">Acerca un objeto reciclable…</span>
+  <!-- selector de modelo -->
+  <ion-segment [value]="modo()" (ionChange)="cambiarModo($event)" style="margin-bottom:12px">
+    <ion-segment-button value="tf"><ion-label>TensorFlow</ion-label></ion-segment-button>
+    <ion-segment-button value="torch"><ion-label>PyTorch</ion-label></ion-segment-button>
+    <ion-segment-button value="compare"><ion-label>Comparar</ion-label></ion-segment-button>
+  </ion-segment>
+
+  <!-- foto capturada -->
+  <ion-card>
+    <ion-card-content style="padding:8px">
+      <div style="position:relative; background:#111; border-radius:8px; overflow:hidden;
+                  display:flex; align-items:center; justify-content:center; min-height:220px">
+        <canvas #photoCanvas style="max-width:100%; max-height:60vh"
+                [style.display]="imageReady() ? 'block' : 'none'"></canvas>
+        @if (!imageReady()) {
+          <div style="color:#888; text-align:center; padding:30px">
+            <ion-icon name="camera" style="font-size:42px"></ion-icon>
+            <p>Toma o elige una foto del objeto</p>
+          </div>
         }
-      </ion-card-title>
-    </ion-card-header>
-    <ion-card-content>
-      <ion-button expand="block" color="success"
-                  (click)="analizar()"
-                  [disabled]="!modelReady() || !isActive() || analizando()"
-                  style="margin-bottom:10px">
-        @if (analizando()) {
-          <ion-spinner slot="start" name="dots"></ion-spinner> Analizando…
-        } @else {
-          <ion-icon slot="start" name="color-wand"></ion-icon> Analizar objeto
-        }
-      </ion-button>
+      </div>
+
+      @if (imageReady()) {
+        <div style="display:flex; align-items:center; gap:8px; margin-top:8px; font-size:13px">
+          <ion-icon name="eye-outline"></ion-icon>
+          <span>Nitidez (OpenCV):</span>
+          <ion-chip [color]="sharpnessColor()" style="height:22px; font-size:12px">
+            <ion-label>{{ sharpness() }} · {{ sharpnessLabel() }}</ion-label>
+          </ion-chip>
+        </div>
+
+        <ion-button expand="block" color="success" style="margin-top:10px"
+                    (click)="analizar()" [disabled]="!modelReady() || analizando()">
+          @if (analizando()) {
+            <ion-spinner slot="start" name="dots"></ion-spinner> Analizando…
+          } @else {
+            <ion-icon slot="start" name="color-wand"></ion-icon>
+            {{ esComparar() ? 'Analizar (TF vs PyTorch)' : 'Analizar' }}
+          }
+        </ion-button>
+      }
 
       @if (modelError()) {
-        <p style="color:var(--ion-color-danger); font-size:12px; word-break:break-word; margin-top:0">
-          ⚠️ Error cargando modelo: {{ modelError() }}
-        </p>
+        <p style="color:var(--ion-color-danger); font-size:12px">⚠️ {{ modelError() }}</p>
       }
-      @for (m of MATERIALS; track m) {
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px">
-          <span style="width:70px; text-transform:capitalize">{{ m }}</span>
-          <div class="m-bar-track" style="flex:1">
-            <div class="m-bar" data-c="success"
-                 [style.width.%]="(probs()[m] || 0) * 100"></div>
-          </div>
-          <span style="width:40px; text-align:right">{{ Math.round((probs()[m] || 0) * 100) }}%</span>
-        </div>
-      }
-      <ion-button expand="block" fill="outline" size="small"
-                  (click)="cambiarFramework()" [disabled]="!modelReady()">
-        <ion-icon slot="start" name="refresh-outline"></ion-icon>
-        Cambiar a {{ framework() === 'tf' ? 'PyTorch' : 'TensorFlow' }}
-      </ion-button>
     </ion-card-content>
   </ion-card>
 
-  <div class="btn-area">
+  <!-- resultados -->
+  @if (resultTf() || resultTorch()) {
+    <div style="display:flex; align-items:center; gap:8px; margin:6px 4px">
+      <ion-icon name="information-circle-outline"></ion-icon>
+      <b>{{ esComparar() ? 'Comparación de modelos' : 'Resultado' }}</b>
+      @if (esComparar()) {
+        @if (coinciden()) {
+          <ion-chip color="success" style="height:22px"><ion-icon name="checkmark-circle"></ion-icon>
+            <ion-label>coinciden</ion-label></ion-chip>
+        } @else {
+          <ion-chip color="warning" style="height:22px"><ion-icon name="close-circle"></ion-icon>
+            <ion-label>difieren</ion-label></ion-chip>
+        }
+      }
+    </div>
 
-    @if (appState() === 'idle') {
-      <ion-button expand="block" color="primary" size="large"
-                  (click)="solicitarCamara()">
-        <ion-icon slot="start" name="videocam"></ion-icon>
-        Iniciar cámara
-      </ion-button>
-    }
-
-    @if (isRequesting()) {
-      <ion-button expand="block" color="medium" size="large" disabled>
-        <ion-spinner slot="start" name="dots"></ion-spinner>
-        Solicitando permiso…
-      </ion-button>
-    }
-
-    @if (isActive()) {
-      <ion-button expand="block" color="danger" size="large"
-                  (click)="detenerCaptura()">
-        <ion-icon slot="start" name="videocam-off"></ion-icon>
-        Detener captura
-      </ion-button>
-    }
-
-    @if (isError()) {
-      <ion-button expand="block" color="warning" size="large"
-                  (click)="reintentar()">
-        <ion-icon slot="start" name="refresh-outline"></ion-icon>
-        Reintentar
-      </ion-button>
-    }
-  </div>
-
-  @if (isError()) {
-    <div class="error-box">
-      <ion-icon name="alert-circle-outline"></ion-icon>
-      <p>{{ errorMsg() }}</p>
+    <div style="display:flex; gap:10px; flex-wrap:wrap">
+      @for (item of resultados(); track item.label) {
+        <ion-card style="flex:1; min-width:150px; margin:4px">
+          <ion-card-header style="padding-bottom:4px">
+            <ion-card-subtitle>{{ item.label }}</ion-card-subtitle>
+            <ion-card-title style="font-size:1.5rem">
+              @if (item.r?.material) {
+                <span style="text-transform:uppercase; color:var(--ion-color-success)">{{ item.r?.material }}</span>
+              } @else {
+                <span style="font-size:1rem; color:var(--ion-color-medium)">sin material claro</span>
+              }
+            </ion-card-title>
+          </ion-card-header>
+          <ion-card-content>
+            @for (m of MATERIALS; track m) {
+              <div style="display:flex; align-items:center; gap:6px; margin-bottom:5px; font-size:13px">
+                <span style="width:62px; text-transform:capitalize">{{ m }}</span>
+                <div style="flex:1; height:8px; background:#e0e0e0; border-radius:4px; overflow:hidden">
+                  <div [style.width.%]="(item.r?.probs?.[m] || 0) * 100"
+                       style="height:100%; background:var(--ion-color-success)"></div>
+                </div>
+                <span style="width:38px; text-align:right">{{ Math.round((item.r?.probs?.[m] || 0) * 100) }}%</span>
+              </div>
+            }
+            <div style="font-size:12px; color:var(--ion-color-medium); margin-top:6px">
+              ⏱ {{ Math.round(item.r?.timeMs || 0) }} ms
+            </div>
+          </ion-card-content>
+        </ion-card>
+      }
     </div>
   }
 
