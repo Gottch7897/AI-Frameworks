@@ -24,14 +24,20 @@ lotes reciclables terminen en el vertedero.
 
 ## 3. Resultados (validación)
 
+Modelos **finales desplegados** (con Optuna donde mejoró). El detalle de la
+comparación **baseline vs Optuna** de los 6 modelos está en `Hiperparametros.md`.
+
 | Modelo | Framework | Accuracy | AUC | Precision(+) | Recall(+) |
 |---|---|---|---|---|---|
-| Plástico | TF | 75.5% | 0.914 | 0.71 | 0.88 |
-| Plástico | PyTorch | 75.0% | 0.856 | 0.84 | 0.56 |
-| **Vidrio** ⚖️ | TF | 89.1% | 0.947 | 0.72 | 0.81 |
-| **Vidrio** ⚖️ | PyTorch | 83.8% | 0.920 | 0.55 | 0.90 |
-| Papel | TF | 89.5% | 0.963 | 0.90 | 0.91 |
-| Papel | PyTorch | 82.9% | 0.906 | 0.89 | 0.76 |
+| Plástico | TF | 84.4% | 0.933 | 0.84 | 0.84 |
+| Plástico | PyTorch | 79.2% | 0.887 | 0.82 | 0.69 |
+| **Vidrio** ⚖️ | TF | ~85–89% | 0.91–0.95 | 0.63 | 0.81 |
+| **Vidrio** ⚖️ | PyTorch | 86.5% | 0.946 | 0.60 | 0.90 |
+| Papel | TF | 91.0% | 0.979 | 0.94 | 0.89 |
+| Papel | PyTorch | 91.5% | 0.969 | 0.91 | 0.93 |
+
+> Nota sobre vidrio-TF: por ser el modelo desbalanceado tiene **alta varianza** entre
+> corridas (medimos 89.1% baseline, 85.4% Optuna y 86.9% al re-evaluar) — ver §4.2.
 
 ## 4. Análisis
 
@@ -41,53 +47,42 @@ lotes reciclables terminen en el vertedero.
 - **Plástico es el más difícil** (AUC 0.86–0.91): es transparente y visualmente
   variado (botellas, envoltorios, colores), se confunde con vidrio. En las
   probabilidades se ve: una botella de plástico activa algo el detector de vidrio.
-- **TensorFlow rindió algo mejor** en promedio (papel y plástico), aunque la
-  diferencia está dentro de la variación esperable (split y semillas), no indica
-  superioridad real de un framework.
+- **TF vs PyTorch quedó parejo:** TF gana en plástico, PyTorch iguala o supera en
+  papel y vidrio. Las diferencias están dentro de la variación esperable (split,
+  semillas, no-determinancia de GPU) y **no indican superioridad real** de un
+  framework — que es justo lo que se espera al usar la misma arquitectura.
 
 ### 4.2 El modelo desequilibrado (vidrio) — lo más interesante
 Con clases 501 vs 2026, la **accuracy engaña**: predecir siempre "no-vidrio" ya da
 ~80%. Por eso miramos **AUC (0.92–0.95, bueno)** y sobre todo **precision/recall**:
 
-- **TF quedó más balanceado** (precision 0.72, recall 0.81): buen compromiso.
-- **PyTorch quedó agresivo** (recall 0.90, **precision 0.55**): detecta casi todos
-  los vidrios, pero **con muchos falsos positivos** (el `pos_weight` sobre-corrige).
+- Ambos modelos alcanzan **recall alto (~0.81–0.90)**: detectan la mayoría de los
+  vidrios, pero con **precision baja (0.60–0.66)** → varios falsos positivos.
+- Es el efecto de compensar el desbalance (`class_weight` en Keras / `pos_weight`
+  en `BCEWithLogitsLoss`): se sube el recall a costa de la precision.
 
-Ambos frameworks compensan el desbalance por mecanismos distintos (`class_weight`
-en Keras vs `pos_weight` en `BCEWithLogitsLoss`), y eso desplaza el punto de
-operación en el trade-off precision/recall.
-
-**Hallazgo clave (varianza):** al re-entrenar el modelo de vidrio con la MISMA
-configuración y semilla, la precision/recall cambió bastante (una corrida dio
-recall 0.55, otra 0.81) por la **no-determinancia de la GPU (cuDNN)**. Es decir, el
-**modelo desequilibrado es inestable entre corridas** — la clase minoritaria y el
-umbral fijo de 0.5 lo hacen sensible. **Conclusión:** para un modelo desbalanceado
-no hay que confiar en una sola corrida; conviene **promediar varias semillas** y
-**ajustar el umbral** en vez de dejarlo en 0.5.
+**Hallazgo clave (varianza):** el modelo de vidrio dio **números distintos en cada
+medición** — 89.1% (baseline), 85.4% (Optuna) y 86.9% (al re-evaluar el guardado) —
+por la **no-determinancia de la GPU (cuDNN)** y su sensibilidad como clase
+minoritaria. **Conclusión:** en un modelo desbalanceado no hay que confiar en una
+sola corrida; conviene **promediar varias semillas** y **ajustar el umbral** en vez
+de dejarlo en 0.5. (Por eso Optuna no lo mejoró de forma confiable — ver §4.3.)
 
 ### 4.3 Optuna (búsqueda de hiperparámetros)
-Se aplicó Optuna al modelo de **vidrio-TF** (6 trials, 8 epochs por trial, objetivo
-= AUC de validación). Mejores hiperparámetros encontrados:
-`learning_rate=0.00056, dropout=0.48, dense_units=64, optimizer=adam, augment=True`.
+Se aplicó Optuna a **los 6 modelos** (objetivo = AUC de validación). La comparación
+completa **baseline vs Optuna** y los mejores hiperparámetros de cada uno están en
+**`Hiperparametros.md`**. Resumen:
 
-**Comparación con el default manual:**
+- **Optuna ayudó claramente** en plástico (TF **+8.9 pp** de accuracy) y en papel,
+  y mejoró los 3 modelos de PyTorch.
+- **No ayudó en vidrio-TF** (el desbalanceado): eligió una capa densa chica
+  (`dense_units=64`) y quedó igual o por debajo del baseline. Por eso, para vidrio-TF
+  se recomienda conservar la configuración baseline.
 
-| vidrio-TF | Accuracy | AUC | Precision | Recall |
-|---|---|---|---|---|
-| Default (dense=256) | **89.1%** | **0.947** | 0.72 | 0.81 |
-| Optuna (dense=64) | 86.1% | 0.894 | 0.74 | 0.56 |
-
-**Hallazgo (importante y honesto):** Optuna **no mejoró** al default; quedó apenas
-por debajo. Eligió una capa densa chica (`dense_units=64`) que rinde menos que los
-256 por defecto en el entrenamiento completo. Conclusión: **con un presupuesto de
-búsqueda chico (6 trials), Optuna no garantiza superar un buen default**; para que
-aporte necesita más trials y/o un espacio de búsqueda mejor acotado.
-
-**Lección adicional:** en una prueba con muy pocas epochs por trial (4), Optuna
-elegía configuraciones que **subentrenaban** aún más. Subir a 8 epochs por trial
-mejora la confiabilidad de la búsqueda, pero sigue sin superar al default aquí.
-Moraleja: Optuna es una herramienta, no magia — hay que darle presupuesto suficiente
-y validar contra un baseline.
+**Moraleja (para la defensa):** Optuna es una herramienta, no magia. Ayuda cuando hay
+margen y presupuesto de búsqueda suficiente, pero en un modelo **desbalanceado e
+inestable** (vidrio) no garantiza mejora — hay que validarlo contra un baseline y con
+varias semillas, no confiar en una sola corrida.
 
 ## 5. Plan de acción
 

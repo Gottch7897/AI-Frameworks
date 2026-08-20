@@ -11,3 +11,9 @@ __pycache__/
 
 # Logs de TensorBoard (muchos archivos); el modelo y la gráfica SÍ se versionan
 artifacts/tensorboard/
+
+# App Ionic
+app/node_modules/
+app/.angular/
+app/dist/
+app/www/

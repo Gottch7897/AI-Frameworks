@@ -1,0 +1,34 @@
+:root {
+  --ion-color-primary:         #3880ff;
+  --ion-color-primary-rgb:     56,128,255;
+  --ion-color-primary-contrast:#ffffff;
+  --ion-color-primary-shade:   #3171e0;
+  --ion-color-primary-tint:    #4c8dff;
+
+  --ion-color-success:         #2dd36f;
+  --ion-color-success-rgb:     45,211,111;
+  --ion-color-warning:         #ffc409;
+  --ion-color-warning-rgb:     255,196,9;
+  --ion-color-danger:          #eb445a;
+  --ion-color-danger-rgb:      235,68,90;
+
+  --ion-background-color:      #f6f8fa;
+  --ion-background-color-rgb:  246,248,250;
+  --ion-text-color:            #1a1a2e;
+
+  // Colores custom para métricas
+  --metric-sharp-color:   #2dd36f;
+  --metric-medium-color:  #ffc409;
+  --metric-blur-color:    #eb445a;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    --ion-background-color:     #121212;
+    --ion-background-color-rgb: 18,18,18;
+    --ion-text-color:           #f0f0f0;
+    --ion-card-background:      #1e1e1e;
+    --ion-item-background:      #1e1e1e;
+    --ion-toolbar-background:   #1a1a1a;
+  }
+}

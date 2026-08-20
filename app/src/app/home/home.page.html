@@ -1,0 +1,146 @@
+<ion-header>
+  <ion-toolbar color="success">
+    <ion-title>♻️ EcoSort</ion-title>
+    <ion-chip slot="end" [color]="modelReady() ? 'light' : 'medium'"
+              style="margin-right:8px; font-size:11px">
+      @if (!modelReady()) {
+        <ion-spinner name="dots" style="width:12px;height:12px;margin-right:4px"></ion-spinner>
+      }
+      <ion-label>{{ framework().toUpperCase() }} {{ modelReady() ? '✓' : '…' }}</ion-label>
+    </ion-chip>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+
+  <video #videoEl autoplay playsinline muted
+         style="position:fixed; top:-9999px; left:-9999px; width:1px; height:1px;">
+  </video>
+
+  <div class="canvas-wrap">
+    <canvas #canvasLive class="preview-canvas"></canvas>
+
+    @if (appState() === 'idle') {
+      <div class="state-overlay">
+        <ion-icon name="videocam" class="big-icon"></ion-icon>
+        <p>Cámara inactiva</p>
+      </div>
+    }
+
+    @if (isRequesting()) {
+      <div class="state-overlay">
+        <ion-spinner name="crescent" style="width:48px;height:48px;color:#fff"></ion-spinner>
+        <p>Solicitando permiso…</p>
+        <small>Acepta el diálogo del navegador</small>
+      </div>
+    }
+
+    @if (isActive()) {
+      <div class="hud">
+        <span class="hud-pill" [attr.data-c]="fpsColor()">
+          {{ fps() }} FPS
+        </span>
+        <span class="hud-pill" [attr.data-c]="sharpnessColor()">
+          ⬡ {{ sharpness() }}
+        </span>
+        <span class="hud-frame">
+          #{{ frameCount() }}
+        </span>
+      </div>
+    }
+  </div>
+
+  <!-- Resultado EcoSort: material detectado -->
+  <ion-card class="m-card" style="margin:12px">
+    <ion-card-header>
+      <ion-card-subtitle>
+        <ion-icon name="color-wand"></ion-icon> Material detectado
+      </ion-card-subtitle>
+      <ion-card-title>
+        @if (!isActive()) {
+          <span style="color:var(--ion-color-medium)">—</span>
+        } @else if (material()) {
+          <span style="text-transform:uppercase; color:var(--ion-color-success); font-size:1.9rem">{{ material() }}</span>
+          <small style="color:var(--ion-color-medium)"> {{ Math.round(confidence() * 100) }}%</small>
+        } @else {
+          <span style="font-size:1.1rem; color:var(--ion-color-medium)">Acerca un objeto reciclable…</span>
+        }
+      </ion-card-title>
+    </ion-card-header>
+    <ion-card-content>
+      <ion-button expand="block" color="success"
+                  (click)="analizar()"
+                  [disabled]="!modelReady() || !isActive() || analizando()"
+                  style="margin-bottom:10px">
+        @if (analizando()) {
+          <ion-spinner slot="start" name="dots"></ion-spinner> Analizando…
+        } @else {
+          <ion-icon slot="start" name="color-wand"></ion-icon> Analizar objeto
+        }
+      </ion-button>
+
+      @if (modelError()) {
+        <p style="color:var(--ion-color-danger); font-size:12px; word-break:break-word; margin-top:0">
+          ⚠️ Error cargando modelo: {{ modelError() }}
+        </p>
+      }
+      @for (m of MATERIALS; track m) {
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px">
+          <span style="width:70px; text-transform:capitalize">{{ m }}</span>
+          <div class="m-bar-track" style="flex:1">
+            <div class="m-bar" data-c="success"
+                 [style.width.%]="(probs()[m] || 0) * 100"></div>
+          </div>
+          <span style="width:40px; text-align:right">{{ Math.round((probs()[m] || 0) * 100) }}%</span>
+        </div>
+      }
+      <ion-button expand="block" fill="outline" size="small"
+                  (click)="cambiarFramework()" [disabled]="!modelReady()">
+        <ion-icon slot="start" name="refresh-outline"></ion-icon>
+        Cambiar a {{ framework() === 'tf' ? 'PyTorch' : 'TensorFlow' }}
+      </ion-button>
+    </ion-card-content>
+  </ion-card>
+
+  <div class="btn-area">
+
+    @if (appState() === 'idle') {
+      <ion-button expand="block" color="primary" size="large"
+                  (click)="solicitarCamara()">
+        <ion-icon slot="start" name="videocam"></ion-icon>
+        Iniciar cámara
+      </ion-button>
+    }
+
+    @if (isRequesting()) {
+      <ion-button expand="block" color="medium" size="large" disabled>
+        <ion-spinner slot="start" name="dots"></ion-spinner>
+        Solicitando permiso…
+      </ion-button>
+    }
+
+    @if (isActive()) {
+      <ion-button expand="block" color="danger" size="large"
+                  (click)="detenerCaptura()">
+        <ion-icon slot="start" name="videocam-off"></ion-icon>
+        Detener captura
+      </ion-button>
+    }
+
+    @if (isError()) {
+      <ion-button expand="block" color="warning" size="large"
+                  (click)="reintentar()">
+        <ion-icon slot="start" name="refresh-outline"></ion-icon>
+        Reintentar
+      </ion-button>
+    }
+  </div>
+
+  @if (isError()) {
+    <div class="error-box">
+      <ion-icon name="alert-circle-outline"></ion-icon>
+      <p>{{ errorMsg() }}</p>
+    </div>
+  }
+
+</ion-content>

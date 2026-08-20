@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>EcoSort — Reciclaje</title>
+  <base href="/" />
+
+  <meta name="viewport"
+        content="viewport-fit=cover, width=device-width, initial-scale=1.0,
+                 minimum-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="color-scheme" content="light dark" />
+
+  <link rel="icon" type="image/png" href="assets/icon/favicon.png" />
+
+  <!--
+    OpenCV.js 4.x — WebAssembly build desde CDN oficial.
+    Se carga de forma asíncrona y notifica cuando está listo
+    ejecutando window.onOpenCvReady (si está definido).
+
+    Alternativa local: copiar opencv.js a src/assets/ y cambiar:
+    <script async src="assets/opencv.js" onload="onOpenCvReady()"></script>
+  -->
+  <script>
+    // Flag global que el servicio OpenCV consulta
+    window._opencvReady = false;
+    window.onOpenCvReady = function () {
+      window._opencvReady = true;
+      window.dispatchEvent(new Event('opencv-ready'));
+      console.log('[OpenCV] Listo — versión:', cv.getBuildInformation().split('\n')[0]);
+    };
+  </script>
+  <script async
+    src="https://docs.opencv.org/4.x/opencv.js"
+    onload="onOpenCvReady()">
+  </script>
+</head>
+<body>
+  <app-root></app-root>
+</body>
+</html>
